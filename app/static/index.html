@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>My DashboardKDV</title>
-  <link rel="stylesheet" href="/static/style.css?v=14">
+  <link rel="stylesheet" href="/static/style.css?v=15">
 </head>
 <body>
 <div class="background"><div id="backgroundImage" class="background-image"></div></div>
@@ -61,6 +61,21 @@
       <label>Категория
         <select id="categoryId" required></select>
       </label>
+
+      <label>Размер плитки
+        <select id="tileSize">
+          <option value="small">Маленькая — компактная</option>
+          <option value="medium">Обычная — стандартная</option>
+          <option value="large">Большая — 2 колонки</option>
+        </select>
+      </label>
+
+      <div class="tile-size-preview" aria-live="polite">
+        <span class="tile-size-demo tile-size-demo-small">S</span>
+        <span class="tile-size-demo tile-size-demo-medium">M</span>
+        <span class="tile-size-demo tile-size-demo-large">L</span>
+        <span>Размер сохраняется отдельно для каждого приложения.</span>
+      </div>
 
       <div class="icon-field">
         <div class="icon-label-row">
@@ -198,7 +213,7 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=14"></script>
+<script src="/static/app.js?v=15"></script>
 
 </body>
 </html>

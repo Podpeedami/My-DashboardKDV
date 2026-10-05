@@ -218,7 +218,8 @@ function renderApps(){
 function currentTitle(){if(selectedCategory==='all')return'Все приложения';if(selectedCategory==='favorites')return'Избранное';return categories.find(c=>c.id===selectedCategory)?.name||''}
 
 function appCard(a){
-  return `<article class="app-card" onclick="openApp(${a.id})">
+  const size = ['small','medium','large'].includes(a.size) ? a.size : 'medium';
+  return `<article class="app-card size-${size}" onclick="openApp(${a.id})">
     ${a.favorite?'<div class="favorite">⭐</div>':''}
     <div class="icon">${iconHtml(a.icon,'app-card-icon')}</div>
     <div class="app-name">${escapeHtml(a.name)}</div>
@@ -329,6 +330,13 @@ async function findFavicon(inputId,containerId,siteUrlInputId,statusId){
   }
 }
 
+function updateTileSizePreview(){
+  const value=document.getElementById('tileSize')?.value||'medium';
+  document.querySelectorAll('.tile-size-demo').forEach(el=>el.classList.remove('active'));
+  const selected=document.querySelector(`.tile-size-demo-${value}`);
+  if(selected)selected.classList.add('active');
+}
+
 function openAppModal(a=null){
   document.getElementById('modal').classList.remove('hidden');
   document.getElementById('modalTitle').textContent=a?'Изменить приложение':'Добавить приложение';
@@ -340,9 +348,11 @@ function openAppModal(a=null){
   document.getElementById('appIconUrl').value='';
   renderIconChoices('appIconChoices','icon',appIcons);
   document.getElementById('favorite').checked=!!a?.favorite;
+  document.getElementById('tileSize').value=['small','medium','large'].includes(a?.size)?a.size:'medium';
   fillCategorySelect();
   if(a)document.getElementById('categoryId').value=a.category_id;
   else if(typeof selectedCategory==='number')document.getElementById('categoryId').value=selectedCategory;
+  updateTileSizePreview();
 }
 
 function closeModal(){document.getElementById('modal').classList.add('hidden')}
@@ -357,7 +367,8 @@ async function saveApp(e){
     description:document.getElementById('description').value.trim(),
     category_id:Number(document.getElementById('categoryId').value),
     icon:document.getElementById('icon').value.trim()||'🚀',
-    favorite:document.getElementById('favorite').checked
+    favorite:document.getElementById('favorite').checked,
+    size:document.getElementById('tileSize').value
   };
   const r=await fetch(id?`/api/apps/${id}`:'/api/apps',{method:id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(item)});
   if(!r.ok){alert((await r.json()).detail||'Ошибка сохранения');return}
@@ -460,6 +471,8 @@ document.addEventListener('DOMContentLoaded',()=>{
   if(themeToggle)themeToggle.addEventListener('click',toggleTheme);
   const themeSelect=document.getElementById('themeSelect');
   if(themeSelect)themeSelect.addEventListener('change',e=>applyTheme(e.target.value));
+  const tileSize=document.getElementById('tileSize');
+  if(tileSize)tileSize.addEventListener('change',updateTileSizePreview);
   document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeSettingsModal();closeModal();closeCategoryModal()}});
   loadData().catch(e=>{console.error(e);document.getElementById('dashboard').innerHTML='<div class="empty">Ошибка загрузки Dashboard</div>'});
   loadBackgroundConfig();

@@ -12,6 +12,7 @@ import urllib.request
 import urllib.error
 import uuid
 from html.parser import HTMLParser
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
@@ -30,6 +31,7 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 ICONS_DIR.mkdir(parents=True, exist_ok=True)
 BACKGROUNDS_DIR.mkdir(parents=True, exist_ok=True)
 
+APP_TILE_SIZES = {'small', 'medium', 'large'}
 MAX_ICON_BYTES = 5 * 1024 * 1024
 MAX_BACKGROUND_BYTES = 8 * 1024 * 1024
 ALLOWED_ICON_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".ico"}
@@ -49,7 +51,7 @@ ALLOWED_ICON_MIME = {
     "image/vnd.microsoft.icon": ".ico",
 }
 
-app = FastAPI(title="My DashboardKDV", version="4.5.0")
+app = FastAPI(title="My DashboardKDV", version="4.6.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/icons", StaticFiles(directory=ICONS_DIR), name="icons")
 app.mount("/backgrounds", StaticFiles(directory=BACKGROUNDS_DIR), name="backgrounds")
@@ -67,6 +69,7 @@ class AppItem(BaseModel):
     category_id: int
     icon: str = Field(default="🚀", max_length=500)
     favorite: bool = False
+    size: Literal['small', 'medium', 'large'] = 'medium'
 
 
 class ExportCategory(BaseModel):
@@ -83,6 +86,7 @@ class ExportApp(BaseModel):
     category_id: int
     icon: str = Field(default="🚀", max_length=500)
     favorite: bool = False
+    size: Literal['small', 'medium', 'large'] = 'medium'
 
 
 class DashboardSettings(BaseModel):
@@ -122,8 +126,14 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, url TEXT NOT NULL,
             description TEXT NOT NULL DEFAULT '', category_id INTEGER NOT NULL,
             icon TEXT NOT NULL DEFAULT '🚀', favorite INTEGER NOT NULL DEFAULT 0,
+            size TEXT NOT NULL DEFAULT 'medium',
             FOREIGN KEY(category_id) REFERENCES categories(id) ON UPDATE CASCADE ON DELETE RESTRICT)"""
         )
+        app_columns = {row['name'] for row in conn.execute("PRAGMA table_info(apps)").fetchall()}
+        if 'size' not in app_columns:
+            conn.execute("ALTER TABLE apps ADD COLUMN size TEXT NOT NULL DEFAULT 'medium'")
+        conn.execute("UPDATE apps SET size='medium' WHERE size NOT IN ('small','medium','large') OR size IS NULL")
+
         conn.execute(
             """CREATE TABLE IF NOT EXISTS background_settings (
             id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -159,11 +169,11 @@ def init_db():
             cat = {r["name"]: r["id"] for r in conn.execute("SELECT id,name FROM categories")}
             conn.executemany(
                 """INSERT INTO apps
-                (name,url,description,category_id,icon,favorite) VALUES (?,?,?,?,?,?)""",
+                (name,url,description,category_id,icon,favorite,size) VALUES (?,?,?,?,?,?,?)""",
                 [
-                    ("Video Converter", "http://localhost:8000", "Перекодировка видео", cat["Мои приложения"], "🎬", 1),
-                    ("GitHub", "https://github.com/", "Репозитории и код", cat["Инструменты"], "💻", 1),
-                    ("Docker", "https://www.docker.com/", "Контейнеры и образы", cat["Docker"], "🐳", 1),
+                    ("Video Converter", "http://localhost:8000", "Перекодировка видео", cat["Мои приложения"], "🎬", 1, "medium"),
+                    ("GitHub", "https://github.com/", "Репозитории и код", cat["Инструменты"], "💻", 1, "medium"),
+                    ("Docker", "https://www.docker.com/", "Контейнеры и образы", cat["Docker"], "🐳", 1, "medium"),
                 ],
             )
 
@@ -229,7 +239,7 @@ def delete_category(category_id: int):
 def list_apps():
     with db() as conn:
         rows = conn.execute(
-            """SELECT a.id,a.name,a.url,a.description,a.category_id,a.icon,a.favorite,
+            """SELECT a.id,a.name,a.url,a.description,a.category_id,a.icon,a.favorite,a.size,
             c.name AS category_name,c.icon AS category_icon FROM apps a JOIN categories c ON c.id=a.category_id
             ORDER BY a.favorite DESC,c.id,a.name"""
         ).fetchall()
@@ -242,8 +252,8 @@ def create_app(item: AppItem):
         if not conn.execute("SELECT id FROM categories WHERE id=?", (item.category_id,)).fetchone():
             raise HTTPException(400, "Категория не найдена")
         cur = conn.execute(
-            "INSERT INTO apps(name,url,description,category_id,icon,favorite) VALUES (?,?,?,?,?,?)",
-            (item.name.strip(), item.url.strip(), item.description.strip(), item.category_id, item.icon.strip() or "🚀", int(item.favorite)),
+            "INSERT INTO apps(name,url,description,category_id,icon,favorite,size) VALUES (?,?,?,?,?,?,?)",
+            (item.name.strip(), item.url.strip(), item.description.strip(), item.category_id, item.icon.strip() or "🚀", int(item.favorite), item.size),
         )
         return {"id": cur.lastrowid, **item.model_dump()}
 
@@ -254,8 +264,8 @@ def update_app(app_id: int, item: AppItem):
         if not conn.execute("SELECT id FROM categories WHERE id=?", (item.category_id,)).fetchone():
             raise HTTPException(400, "Категория не найдена")
         cur = conn.execute(
-            "UPDATE apps SET name=?,url=?,description=?,category_id=?,icon=?,favorite=? WHERE id=?",
-            (item.name.strip(), item.url.strip(), item.description.strip(), item.category_id, item.icon.strip() or "🚀", int(item.favorite), app_id),
+            "UPDATE apps SET name=?,url=?,description=?,category_id=?,icon=?,favorite=?,size=? WHERE id=?",
+            (item.name.strip(), item.url.strip(), item.description.strip(), item.category_id, item.icon.strip() or "🚀", int(item.favorite), item.size, app_id),
         )
         if not cur.rowcount:
             raise HTTPException(404, "Приложение не найдено")
@@ -692,7 +702,7 @@ def export_settings(theme: str = "dark"):
 
     with db() as conn:
         categories = [dict(r) for r in conn.execute("SELECT id,name,icon FROM categories ORDER BY id").fetchall()]
-        apps = [dict(r) for r in conn.execute("SELECT id,name,url,description,category_id,icon,favorite FROM apps ORDER BY id").fetchall()]
+        apps = [dict(r) for r in conn.execute("SELECT id,name,url,description,category_id,icon,favorite,size FROM apps ORDER BY id").fetchall()]
     for item in apps:
         item["favorite"] = bool(item["favorite"])
 
@@ -735,7 +745,7 @@ def import_settings(settings: DashboardSettings):
                 if new_category_id is None:
                     raise ValueError(f"Категория для приложения «{app_item.name}» не найдена")
                 conn.execute(
-                    "INSERT INTO apps(name,url,description,category_id,icon,favorite) VALUES (?,?,?,?,?,?)",
+                    "INSERT INTO apps(name,url,description,category_id,icon,favorite,size) VALUES (?,?,?,?,?,?,?)",
                     (
                         app_item.name.strip(),
                         app_item.url.strip(),
@@ -743,6 +753,7 @@ def import_settings(settings: DashboardSettings):
                         new_category_id,
                         app_item.icon.strip() or "🚀",
                         int(app_item.favorite),
+                        app_item.size if app_item.size in APP_TILE_SIZES else "medium",
                     ),
                 )
             emby = settings.model_dump().get("emby") if hasattr(settings, "model_dump") else None

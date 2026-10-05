@@ -17,7 +17,7 @@ $repo = ($ownerRepo -split '/')[1]
 if (-not (Test-Path .git)) { git init }
 git branch -M main
 git add .
-git commit -m 'My DashboardKDV 4.5 release' 2>$null
+git commit -m 'My DashboardKDV 1.1.0 release' 2>$null
 if ($LASTEXITCODE -ne 0) { Write-Host 'Нет новых изменений для коммита.' }
 git remote remove origin 2>$null
 if ($LASTEXITCODE -ne 0) { $global:LASTEXITCODE = 0 }
