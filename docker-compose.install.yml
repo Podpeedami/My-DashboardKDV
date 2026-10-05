@@ -1,0 +1,9 @@
+services:
+  dashboard:
+    image: ghcr.io/podpeedami/my-dashboardkdv:latest
+    container_name: my-dashboardkdv
+    ports:
+      - "8080:8000"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
