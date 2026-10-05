@@ -1,16 +1,83 @@
-# My DashboardKDV 4.4
+# My DashboardKDV 1.0.0
 
-Dashboard-only web application with application/category management, light/dark themes, custom icons, Emby status integration, and a customizable background image.
+Персональный веб-дашборд для быстрых ссылок на приложения.
 
-## Background
+## Возможности
 
-In **Settings → Background image** you can upload an image from the computer or download it from a public URL. The image is stored under `data/backgrounds`, so it survives Docker rebuilds. You can adjust background opacity and remove the image. The background image is embedded into the JSON export so it can be restored on another installation.
+- приложения и категории;
+- избранное и поиск;
+- светлая и тёмная тема;
+- emoji, локальные иконки, иконки по URL и favicon;
+- фоновое изображение с настройкой затемнения;
+- интеграция статуса Emby;
+- экспорт и импорт настроек в JSON;
+- SQLite в `./data`.
 
-## Run
+Docker используется только для запуска Dashboard.
+
+## Установка из готового Docker-образа
+
+Требуется установленный Docker Desktop.
 
 ```powershell
-docker compose build --no-cache
+docker compose pull
 docker compose up -d
 ```
 
-Open `http://localhost:8080`.
+Открой:
+
+```text
+http://localhost:8080
+```
+
+Остановка:
+
+```powershell
+docker compose down
+```
+
+Обновление до последнего образа:
+
+```powershell
+docker compose pull
+docker compose up -d
+```
+
+Данные Dashboard хранятся в `./data` и не входят в Docker-образ.
+
+## Локальная разработка
+
+Для сборки из исходников:
+
+```powershell
+docker compose -f docker-compose.build.yml build --no-cache
+docker compose -f docker-compose.build.yml up -d
+```
+
+Остановка:
+
+```powershell
+docker compose -f docker-compose.build.yml down
+```
+
+## Docker image
+
+```text
+ghcr.io/podpeedami/my-dashboardkdv:latest
+ghcr.io/podpeedami/my-dashboardkdv:1.0.0
+```
+
+GitHub Actions автоматически собирает и публикует образ в GitHub Container Registry при push в `main` и при создании тега `v*.*.*`.
+
+## Хранение данных
+
+Локальная папка:
+
+```text
+data/
+├── dashboard.db
+├── icons/
+└── backgrounds/
+```
+
+Эта папка специально исключена из Git и Docker build context.

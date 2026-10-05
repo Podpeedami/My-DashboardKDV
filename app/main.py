@@ -24,6 +24,8 @@ DB_PATH = DATA_DIR / "dashboard.db"
 ICONS_DIR = DATA_DIR / "icons"
 BACKGROUNDS_DIR = DATA_DIR / "backgrounds"
 STATIC_DIR = BASE_DIR / "static"
+DEFAULT_BACKGROUND_SOURCE = STATIC_DIR / "assets" / "default-background.png"
+DEFAULT_BACKGROUND_NAME = "my-dashboardkdv-default.png"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 ICONS_DIR.mkdir(parents=True, exist_ok=True)
 BACKGROUNDS_DIR.mkdir(parents=True, exist_ok=True)
@@ -47,7 +49,7 @@ ALLOWED_ICON_MIME = {
     "image/vnd.microsoft.icon": ".ico",
 }
 
-app = FastAPI(title="My DashboardKDV", version="4.4.0")
+app = FastAPI(title="My DashboardKDV", version="4.5.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/icons", StaticFiles(directory=ICONS_DIR), name="icons")
 app.mount("/backgrounds", StaticFiles(directory=BACKGROUNDS_DIR), name="backgrounds")
@@ -90,6 +92,7 @@ class DashboardSettings(BaseModel):
     categories: list[ExportCategory] = Field(default_factory=list)
     apps: list[ExportApp] = Field(default_factory=list)
     emby: dict = Field(default_factory=dict)
+    background: dict = Field(default_factory=dict)
 
 
 class EmbyConfig(BaseModel):
@@ -138,6 +141,15 @@ def init_db():
             enabled INTEGER NOT NULL DEFAULT 1
             )"""
         )
+        background_row = conn.execute("SELECT id FROM background_settings WHERE id=1").fetchone()
+        if background_row is None and DEFAULT_BACKGROUND_SOURCE.exists():
+            default_path = BACKGROUNDS_DIR / DEFAULT_BACKGROUND_NAME
+            if not default_path.exists():
+                default_path.write_bytes(DEFAULT_BACKGROUND_SOURCE.read_bytes())
+            conn.execute(
+                "INSERT INTO background_settings(id,path,opacity,enabled) VALUES(1,?,?,1)",
+                (f"/backgrounds/{DEFAULT_BACKGROUND_NAME}", 0.35),
+            )
         if conn.execute("SELECT COUNT(*) FROM categories").fetchone()[0] == 0:
             conn.executemany(
                 "INSERT INTO categories(name, icon) VALUES (?, ?)",
