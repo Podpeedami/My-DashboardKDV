@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>My DashboardKDV</title>
-  <link rel="stylesheet" href="/static/style.css?v=15">
+  <link rel="stylesheet" href="/static/style.css?v=18">
 </head>
 <body>
 <div class="background"><div id="backgroundImage" class="background-image"></div></div>
@@ -15,7 +15,7 @@
       <div class="brand">My DashboardKDV</div>
       <h1>Все приложения в одном месте</h1>
     </div>
-    <div class="header-actions"><button id="themeToggle" type="button">☀️ Светлая</button><button id="settingsButton" type="button">⚙ Настройки</button><button class="primary" onclick="openAppModal()">＋ Приложение</button></div>
+    <div class="header-actions"><button id="themeToggle" type="button">☀️ Светлая</button><button id="settingsButton" type="button">⚙ Настройки</button><button id="orderEditButton" type="button">↔ Порядок</button><button class="primary" onclick="openAppModal()">＋ Приложение</button></div>
   </header>
 
   <section class="toolbar">
@@ -30,6 +30,7 @@
   <nav id="categories" class="category-bar"></nav>
 
   <section class="category-tools">
+    <div id="orderEditHint" class="order-edit-hint"></div>
     <button onclick="openCategoryModal()">＋ Создать категорию</button>
     <button onclick="editSelectedCategory()">✎ Изменить категорию</button>
     <button onclick="deleteSelectedCategory()">🗑 Удалить категорию</button>
@@ -145,11 +146,27 @@
         <input id="backgroundUrl" maxlength="2048" placeholder="URL изображения: https://site.com/background.jpg">
         <button type="button" onclick="importBackgroundFromUrl()">🌐 Загрузить URL</button>
       </div>
-      <label>Затемнение фона <span id="backgroundOpacityValue">35%</span>
-        <input id="backgroundOpacity" class="range-input" type="range" min="0" max="100" value="35" oninput="previewBackgroundOpacity(this.value)">
-      </label>
       <button class="primary full" type="button" onclick="saveBackgroundSettings()">💾 Сохранить фон</button>
       <div class="settings-note compact">Изображение сохраняется локально в Dashboard. При экспорте настроек фон включается в JSON-файл.</div>
+    </div>
+
+
+    <div class="settings-section">
+      <h3>✨ Внешний вид панели</h3>
+      <label>Прозрачность плиток <span id="cardOpacityValue">90%</span>
+        <input id="cardOpacity" class="range-input" type="range" min="45" max="100" value="90" oninput="previewAppearanceControl('cardOpacity',this.value)">
+      </label>
+      <label>Размытие плиток <span id="cardBlurValue">6 px</span>
+        <input id="cardBlur" class="range-input" type="range" min="0" max="20" value="6" oninput="previewAppearanceControl('cardBlur',this.value)">
+      </label>
+      <label>Размытие фона <span id="backgroundBlurValue">2 px</span>
+        <input id="backgroundBlur" class="range-input" type="range" min="0" max="12" value="2" oninput="previewAppearanceControl('backgroundBlur',this.value)">
+      </label>
+      <label>Затемнение фона <span id="backgroundDimValue">55%</span>
+        <input id="backgroundDim" class="range-input" type="range" min="0" max="85" value="55" oninput="previewAppearanceControl('backgroundDim',this.value)">
+      </label>
+      <button class="primary full" type="button" onclick="saveAppearanceSettings()">💾 Сохранить внешний вид</button>
+      <div class="settings-note compact">Параметры применяются сразу и сохраняются отдельно от самого изображения.</div>
     </div>
 
     <div class="settings-section">
@@ -213,7 +230,7 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=15"></script>
+<script src="/static/app.js?v=18"></script>
 
 </body>
 </html>

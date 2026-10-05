@@ -51,7 +51,7 @@ ALLOWED_ICON_MIME = {
     "image/vnd.microsoft.icon": ".ico",
 }
 
-app = FastAPI(title="My DashboardKDV", version="4.6.0")
+app = FastAPI(title="My DashboardKDV", version="1.3.1")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/icons", StaticFiles(directory=ICONS_DIR), name="icons")
 app.mount("/backgrounds", StaticFiles(directory=BACKGROUNDS_DIR), name="backgrounds")
@@ -87,6 +87,11 @@ class ExportApp(BaseModel):
     icon: str = Field(default="🚀", max_length=500)
     favorite: bool = False
     size: Literal['small', 'medium', 'large'] = 'medium'
+    sort_order: int = 0
+
+
+class ReorderApps(BaseModel):
+    ids: list[int] = Field(default_factory=list)
 
 
 class DashboardSettings(BaseModel):
@@ -97,6 +102,7 @@ class DashboardSettings(BaseModel):
     apps: list[ExportApp] = Field(default_factory=list)
     emby: dict = Field(default_factory=dict)
     background: dict = Field(default_factory=dict)
+    appearance: dict = Field(default_factory=dict)
 
 
 class EmbyConfig(BaseModel):
@@ -127,12 +133,17 @@ def init_db():
             description TEXT NOT NULL DEFAULT '', category_id INTEGER NOT NULL,
             icon TEXT NOT NULL DEFAULT '🚀', favorite INTEGER NOT NULL DEFAULT 0,
             size TEXT NOT NULL DEFAULT 'medium',
+            sort_order INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY(category_id) REFERENCES categories(id) ON UPDATE CASCADE ON DELETE RESTRICT)"""
         )
         app_columns = {row['name'] for row in conn.execute("PRAGMA table_info(apps)").fetchall()}
         if 'size' not in app_columns:
             conn.execute("ALTER TABLE apps ADD COLUMN size TEXT NOT NULL DEFAULT 'medium'")
+        if 'sort_order' not in app_columns:
+            conn.execute("ALTER TABLE apps ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
         conn.execute("UPDATE apps SET size='medium' WHERE size NOT IN ('small','medium','large') OR size IS NULL")
+        if conn.execute("SELECT COUNT(*) FROM apps WHERE sort_order != 0").fetchone()[0] == 0:
+            conn.execute("UPDATE apps SET sort_order = id - 1")
 
         conn.execute(
             """CREATE TABLE IF NOT EXISTS background_settings (
@@ -151,6 +162,20 @@ def init_db():
             enabled INTEGER NOT NULL DEFAULT 1
             )"""
         )
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS appearance_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            card_opacity REAL NOT NULL DEFAULT 0.90,
+            card_blur REAL NOT NULL DEFAULT 6.0,
+            background_blur REAL NOT NULL DEFAULT 2.0,
+            background_dim REAL NOT NULL DEFAULT 0.55
+            )"""
+        )
+        if conn.execute("SELECT 1 FROM appearance_settings WHERE id=1").fetchone() is None:
+            conn.execute(
+                "INSERT INTO appearance_settings(id,card_opacity,card_blur,background_blur,background_dim) VALUES(1,0.90,6.0,2.0,0.55)"
+            )
+        conn.execute("UPDATE background_settings SET opacity=1 WHERE id=1")
         background_row = conn.execute("SELECT id FROM background_settings WHERE id=1").fetchone()
         if background_row is None and DEFAULT_BACKGROUND_SOURCE.exists():
             default_path = BACKGROUNDS_DIR / DEFAULT_BACKGROUND_NAME
@@ -158,7 +183,7 @@ def init_db():
                 default_path.write_bytes(DEFAULT_BACKGROUND_SOURCE.read_bytes())
             conn.execute(
                 "INSERT INTO background_settings(id,path,opacity,enabled) VALUES(1,?,?,1)",
-                (f"/backgrounds/{DEFAULT_BACKGROUND_NAME}", 0.35),
+                (f"/backgrounds/{DEFAULT_BACKGROUND_NAME}", 1.0),
             )
         if conn.execute("SELECT COUNT(*) FROM categories").fetchone()[0] == 0:
             conn.executemany(
@@ -169,11 +194,11 @@ def init_db():
             cat = {r["name"]: r["id"] for r in conn.execute("SELECT id,name FROM categories")}
             conn.executemany(
                 """INSERT INTO apps
-                (name,url,description,category_id,icon,favorite,size) VALUES (?,?,?,?,?,?,?)""",
+                (name,url,description,category_id,icon,favorite,size,sort_order) VALUES (?,?,?,?,?,?,?,?)""",
                 [
-                    ("Video Converter", "http://localhost:8000", "Перекодировка видео", cat["Мои приложения"], "🎬", 1, "medium"),
-                    ("GitHub", "https://github.com/", "Репозитории и код", cat["Инструменты"], "💻", 1, "medium"),
-                    ("Docker", "https://www.docker.com/", "Контейнеры и образы", cat["Docker"], "🐳", 1, "medium"),
+                    ("Video Converter", "http://localhost:8000", "Перекодировка видео", cat["Мои приложения"], "🎬", 1, "medium", 0),
+                    ("GitHub", "https://github.com/", "Репозитории и код", cat["Инструменты"], "💻", 1, "medium", 1),
+                    ("Docker", "https://www.docker.com/", "Контейнеры и образы", cat["Docker"], "🐳", 1, "medium", 2),
                 ],
             )
 
@@ -239,11 +264,26 @@ def delete_category(category_id: int):
 def list_apps():
     with db() as conn:
         rows = conn.execute(
-            """SELECT a.id,a.name,a.url,a.description,a.category_id,a.icon,a.favorite,a.size,
+            """SELECT a.id,a.name,a.url,a.description,a.category_id,a.icon,a.favorite,a.size,a.sort_order,
             c.name AS category_name,c.icon AS category_icon FROM apps a JOIN categories c ON c.id=a.category_id
-            ORDER BY a.favorite DESC,c.id,a.name"""
+            ORDER BY a.sort_order,a.id"""
         ).fetchall()
     return [dict(r) | {"favorite": bool(r["favorite"])} for r in rows]
+
+
+@app.post("/api/apps/reorder")
+def reorder_apps(payload: ReorderApps):
+    incoming = payload.ids
+    with db() as conn:
+        rows = conn.execute("SELECT id FROM apps ORDER BY sort_order,id").fetchall()
+        current_ids = [int(r["id"]) for r in rows]
+        if len(incoming) != len(current_ids) or set(incoming) != set(current_ids):
+            raise HTTPException(400, "Список приложений для сортировки не совпадает с текущим списком")
+        conn.executemany(
+            "UPDATE apps SET sort_order=? WHERE id=?",
+            [(position, app_id) for position, app_id in enumerate(incoming)],
+        )
+    return {"ok": True, "count": len(incoming)}
 
 
 @app.post("/api/apps")
@@ -251,9 +291,10 @@ def create_app(item: AppItem):
     with db() as conn:
         if not conn.execute("SELECT id FROM categories WHERE id=?", (item.category_id,)).fetchone():
             raise HTTPException(400, "Категория не найдена")
+        next_order = conn.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM apps").fetchone()["next_order"]
         cur = conn.execute(
-            "INSERT INTO apps(name,url,description,category_id,icon,favorite,size) VALUES (?,?,?,?,?,?,?)",
-            (item.name.strip(), item.url.strip(), item.description.strip(), item.category_id, item.icon.strip() or "🚀", int(item.favorite), item.size),
+            "INSERT INTO apps(name,url,description,category_id,icon,favorite,size,sort_order) VALUES (?,?,?,?,?,?,?,?)",
+            (item.name.strip(), item.url.strip(), item.description.strip(), item.category_id, item.icon.strip() or "🚀", int(item.favorite), item.size, int(next_order)),
         )
         return {"id": cur.lastrowid, **item.model_dump()}
 
@@ -320,22 +361,68 @@ def _save_background_bytes(data: bytes, ext: str) -> str:
     rel = f"/backgrounds/{name}"
     with db() as conn:
         conn.execute(
-            """INSERT INTO background_settings(id,path,opacity,enabled) VALUES(1,?,COALESCE((SELECT opacity FROM background_settings WHERE id=1),0.35),1)
+            """INSERT INTO background_settings(id,path,opacity,enabled) VALUES(1,?,1.0,1)
             ON CONFLICT(id) DO UPDATE SET path=excluded.path,enabled=1""",
             (rel,),
         )
     return rel
 
 
+def _appearance_settings() -> dict:
+    with db() as conn:
+        row = conn.execute(
+            "SELECT card_opacity,card_blur,background_blur,background_dim FROM appearance_settings WHERE id=1"
+        ).fetchone()
+    if not row:
+        return {"card_opacity": 0.90, "card_blur": 6.0, "background_blur": 2.0, "background_dim": 0.55}
+    return {
+        "card_opacity": max(0.45, min(1.0, float(row["card_opacity"] or 0.90))),
+        "card_blur": max(0.0, min(20.0, float(row["card_blur"] or 6.0))),
+        "background_blur": max(0.0, min(12.0, float(row["background_blur"] or 2.0))),
+        "background_dim": max(0.0, min(0.85, float(row["background_dim"] or 0.55))),
+    }
+
+
+@app.get("/api/appearance")
+def get_appearance():
+    return _appearance_settings()
+
+
+@app.put("/api/appearance")
+def update_appearance(payload: dict):
+    try:
+        card_opacity = float(payload.get("card_opacity", 0.90))
+        card_blur = float(payload.get("card_blur", 6.0))
+        background_blur = float(payload.get("background_blur", 2.0))
+        background_dim = float(payload.get("background_dim", 0.55))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Некорректные значения внешнего вида")
+    if not 0.45 <= card_opacity <= 1.0:
+        raise HTTPException(400, "Прозрачность плиток должна быть от 45 до 100%")
+    if not 0 <= card_blur <= 20:
+        raise HTTPException(400, "Размытие плиток должно быть от 0 до 20 px")
+    if not 0 <= background_blur <= 12:
+        raise HTTPException(400, "Размытие фона должно быть от 0 до 12 px")
+    if not 0 <= background_dim <= 0.85:
+        raise HTTPException(400, "Затемнение фона должно быть от 0 до 85%")
+    with db() as conn:
+        conn.execute(
+            """INSERT INTO appearance_settings(id,card_opacity,card_blur,background_blur,background_dim) VALUES(1,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET card_opacity=excluded.card_opacity,card_blur=excluded.card_blur,background_blur=excluded.background_blur,background_dim=excluded.background_dim""",
+            (card_opacity, card_blur, background_blur, background_dim),
+        )
+    return _appearance_settings()
+
+
 def _background_settings() -> dict:
     with db() as conn:
         row = conn.execute("SELECT path,opacity,enabled FROM background_settings WHERE id=1").fetchone()
     if not row:
-        return {"enabled": False, "url": "", "opacity": 0.35}
+        return {"enabled": False, "url": "", "opacity": 1.0}
     return {
         "enabled": bool(row["enabled"] and row["path"]),
         "url": row["path"],
-        "opacity": max(0.0, min(1.0, float(row["opacity"] or 0.35))),
+        "opacity": 1.0,
     }
 
 
@@ -526,9 +613,7 @@ def background_from_url(payload: dict):
 
 @app.put("/api/background")
 def update_background(payload: dict):
-    opacity = float(payload.get("opacity", 0.35))
-    if not 0 <= opacity <= 1:
-        raise HTTPException(400, "Прозрачность должна быть от 0 до 1")
+    opacity = 1.0
     enabled = bool(payload.get("enabled", True))
     with db() as conn:
         conn.execute(
@@ -702,12 +787,12 @@ def export_settings(theme: str = "dark"):
 
     with db() as conn:
         categories = [dict(r) for r in conn.execute("SELECT id,name,icon FROM categories ORDER BY id").fetchall()]
-        apps = [dict(r) for r in conn.execute("SELECT id,name,url,description,category_id,icon,favorite,size FROM apps ORDER BY id").fetchall()]
+        apps = [dict(r) for r in conn.execute("SELECT id,name,url,description,category_id,icon,favorite,size,sort_order FROM apps ORDER BY sort_order,id").fetchall()]
     for item in apps:
         item["favorite"] = bool(item["favorite"])
 
     background = _background_settings()
-    background_export = {"enabled": background.get("enabled", False), "url": "", "opacity": background.get("opacity", 0.35)}
+    background_export = {"enabled": background.get("enabled", False), "url": "", "opacity": 1.0}
     bg_file = _background_file_for_export()
     if background.get("enabled") and bg_file:
         mime = mimetypes.guess_type(bg_file.name)[0] or "image/jpeg"
@@ -723,6 +808,7 @@ def export_settings(theme: str = "dark"):
         "apps": apps,
         "emby": get_emby_config(),
         "background": background_export,
+        "appearance": _appearance_settings(),
     }
 
 
@@ -740,12 +826,14 @@ def import_settings(settings: DashboardSettings):
                     (category.name.strip(), category.icon.strip() or "📁"),
                 )
                 old_to_new[category.id] = cur.lastrowid
-            for app_item in settings.apps:
+            has_explicit_order = any(getattr(app_item, "sort_order", 0) != 0 for app_item in settings.apps)
+            for index, app_item in enumerate(settings.apps):
                 new_category_id = old_to_new.get(app_item.category_id)
                 if new_category_id is None:
                     raise ValueError(f"Категория для приложения «{app_item.name}» не найдена")
+                sort_order = int(app_item.sort_order) if has_explicit_order else index
                 conn.execute(
-                    "INSERT INTO apps(name,url,description,category_id,icon,favorite,size) VALUES (?,?,?,?,?,?,?)",
+                    "INSERT INTO apps(name,url,description,category_id,icon,favorite,size,sort_order) VALUES (?,?,?,?,?,?,?,?)",
                     (
                         app_item.name.strip(),
                         app_item.url.strip(),
@@ -754,6 +842,7 @@ def import_settings(settings: DashboardSettings):
                         app_item.icon.strip() or "🚀",
                         int(app_item.favorite),
                         app_item.size if app_item.size in APP_TILE_SIZES else "medium",
+                        sort_order,
                     ),
                 )
             emby = settings.model_dump().get("emby") if hasattr(settings, "model_dump") else None
@@ -769,7 +858,7 @@ def import_settings(settings: DashboardSettings):
 
             background = settings.model_dump().get("background") if hasattr(settings, "model_dump") else None
             if isinstance(background, dict):
-                opacity = max(0.0, min(1.0, float(background.get("opacity", 0.35))))
+                opacity = 1.0
                 bg_url = ""
                 bg_data = str(background.get("data", ""))
                 if bg_data.startswith("data:") and ";base64," in bg_data:
@@ -788,6 +877,18 @@ def import_settings(settings: DashboardSettings):
                 conn.execute(
                     "UPDATE background_settings SET path=?,opacity=?,enabled=? WHERE id=1",
                     (bg_url, opacity, int(bool(background.get("enabled", bool(bg_url))))),
+                )
+
+            appearance = settings.model_dump().get("appearance") if hasattr(settings, "model_dump") else None
+            if isinstance(appearance, dict):
+                card_opacity = max(0.45, min(1.0, float(appearance.get("card_opacity", 0.90))))
+                card_blur = max(0.0, min(20.0, float(appearance.get("card_blur", 6.0))))
+                background_blur = max(0.0, min(12.0, float(appearance.get("background_blur", 2.0))))
+                background_dim = max(0.0, min(0.85, float(appearance.get("background_dim", 0.55))))
+                conn.execute(
+                    """INSERT INTO appearance_settings(id,card_opacity,card_blur,background_blur,background_dim) VALUES(1,?,?,?,?)
+                    ON CONFLICT(id) DO UPDATE SET card_opacity=excluded.card_opacity,card_blur=excluded.card_blur,background_blur=excluded.background_blur,background_dim=excluded.background_dim""",
+                    (card_opacity, card_blur, background_blur, background_dim),
                 )
     except sqlite3.IntegrityError as exc:
         raise HTTPException(400, f"Не удалось импортировать настройки: {exc}")

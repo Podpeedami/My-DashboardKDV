@@ -1,5 +1,7 @@
 let apps = [], categories = [], selectedCategory = "all", embyTimer = null;
+let orderEditMode = false, dragAppId = null;
 let backgroundSettings = {enabled:false, url:"", opacity:0.35};
+let appearanceSettings = {card_opacity:0.90, card_blur:6, background_blur:2, background_dim:0.55};
 let currentTheme = localStorage.getItem("mdkdv-theme") === "light" ? "light" : "dark";
 
 
@@ -19,22 +21,45 @@ function applyTheme(theme, persist = true){
 function toggleTheme(){applyTheme(currentTheme === 'dark' ? 'light' : 'dark');}
 
 
+function applyAppearance(settings = appearanceSettings, syncControls = false){
+  appearanceSettings = {
+    card_opacity: Math.max(0.45, Math.min(1, Number(settings?.card_opacity ?? 0.90))),
+    card_blur: Math.max(0, Math.min(20, Number(settings?.card_blur ?? 6))),
+    background_blur: Math.max(0, Math.min(12, Number(settings?.background_blur ?? 2))),
+    background_dim: Math.max(0, Math.min(0.85, Number(settings?.background_dim ?? 0.55)))
+  };
+  const root=document.documentElement;
+  root.style.setProperty('--dashboard-bg-blur', `${appearanceSettings.background_blur}px`);
+  root.style.setProperty('--dashboard-bg-dim', appearanceSettings.background_dim);
+  root.style.setProperty('--dashboard-card-opacity', appearanceSettings.card_opacity);
+  root.style.setProperty('--dashboard-card-blur', `${appearanceSettings.card_blur}px`);
+
+  // Принудительно применяем параметры к уже отрисованным плиткам.
+  // Это гарантирует мгновенное обновление без перерисовки Dashboard.
+  const cardRgb = getComputedStyle(root).getPropertyValue('--card-rgb').trim() || '25,29,39';
+  document.querySelectorAll('.app-card').forEach(card => {
+    card.style.setProperty('background-color', `rgba(${cardRgb}, ${appearanceSettings.card_opacity})`);
+    card.style.setProperty('backdrop-filter', `blur(${appearanceSettings.card_blur}px)`);
+    card.style.setProperty('-webkit-backdrop-filter', `blur(${appearanceSettings.card_blur}px)`);
+  });
+
+  if(syncControls) syncAppearanceControls();
+}
+
 function applyBackground(settings){
   backgroundSettings = {
     enabled: !!settings?.enabled,
-    url: settings?.url || "",
-    opacity: Math.max(0, Math.min(1, Number(settings?.opacity ?? 0.35)))
+    url: settings?.url || '',
+    opacity: 1
   };
   const root=document.documentElement;
-  root.style.setProperty('--dashboard-bg-opacity', backgroundSettings.enabled && backgroundSettings.url ? backgroundSettings.opacity : 0);
+  // Прозрачность самого изображения больше не настраивается отдельно.
+  // Единственный регулятор затемнения находится в разделе «Внешний вид панели».
+  root.style.setProperty('--dashboard-bg-opacity', backgroundSettings.enabled && backgroundSettings.url ? 1 : 0);
   const el=document.getElementById('backgroundImage');
   if(el){
     el.style.backgroundImage = backgroundSettings.enabled && backgroundSettings.url ? `url("${String(backgroundSettings.url).replaceAll('"','%22')}")` : 'none';
   }
-  const slider=document.getElementById('backgroundOpacity');
-  if(slider)slider.value=Math.round(backgroundSettings.opacity*100);
-  const value=document.getElementById('backgroundOpacityValue');
-  if(value)value.textContent=Math.round(backgroundSettings.opacity*100)+'%';
   const preview=document.getElementById('backgroundPreview');
   if(preview){
     if(backgroundSettings.enabled && backgroundSettings.url){
@@ -58,11 +83,48 @@ async function loadBackgroundConfig(){
   }catch(e){console.error(e)}
 }
 
-function previewBackgroundOpacity(value){
-  const opacity=Math.max(0,Math.min(1,Number(value)/100));
-  document.getElementById('backgroundOpacityValue').textContent=Math.round(opacity*100)+'%';
-  backgroundSettings.opacity=opacity;
-  document.documentElement.style.setProperty('--dashboard-bg-opacity', backgroundSettings.enabled && backgroundSettings.url ? opacity : 0);
+async function loadAppearanceConfig(){
+  try{
+    const r=await fetch('/api/appearance',{cache:'no-store'});
+    const data=await r.json();
+    applyAppearance(data, true);
+    applyBackground(backgroundSettings);
+  }catch(e){console.error(e)}
+}
+
+function syncAppearanceControls(){
+  const values={
+    cardOpacity: Math.round(Number(appearanceSettings.card_opacity)*100),
+    cardBlur: Number(appearanceSettings.card_blur),
+    backgroundBlur: Number(appearanceSettings.background_blur),
+    backgroundDim: Math.round(Number(appearanceSettings.background_dim)*100)
+  };
+  for(const [id,value] of Object.entries(values)){
+    const el=document.getElementById(id);
+    const out=document.getElementById(`${id}Value`);
+    if(el)el.value=value;
+    if(out)out.textContent=id==='cardOpacity'||id==='backgroundDim'?`${value}%`:`${value} px`;
+  }
+}
+
+function previewAppearanceControl(kind,value){
+  const n=Number(value);
+  if(kind==='cardOpacity')appearanceSettings.card_opacity=n/100;
+  if(kind==='cardBlur')appearanceSettings.card_blur=n;
+  if(kind==='backgroundBlur')appearanceSettings.background_blur=n;
+  if(kind==='backgroundDim')appearanceSettings.background_dim=n/100;
+  applyAppearance(appearanceSettings, true);
+}
+
+async function saveAppearanceSettings(){
+  try{
+    const r=await fetch('/api/appearance',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(appearanceSettings)});
+    const data=await r.json();
+    if(!r.ok)throw new Error(data.detail||'Не удалось сохранить внешний вид');
+    applyAppearance(data, true);
+    applyBackground(backgroundSettings);
+    alert('Настройки внешнего вида сохранены.');
+  }catch(e){alert(e.message)}
 }
 
 async function uploadBackgroundFile(event){
@@ -76,6 +138,7 @@ async function uploadBackgroundFile(event){
     if(!r.ok)throw new Error(data.detail||'Не удалось загрузить фон');
     backgroundSettings.url=data.url;
     backgroundSettings.enabled=true;
+    backgroundSettings.opacity=1;
     applyBackground(backgroundSettings);
     alert('Фоновое изображение загружено. Нажмите «Сохранить фон».');
   }catch(e){alert(e.message)}
@@ -91,6 +154,7 @@ async function importBackgroundFromUrl(){
     if(!r.ok)throw new Error(data.detail||'Не удалось скачать фон');
     backgroundSettings.url=data.url;
     backgroundSettings.enabled=true;
+    backgroundSettings.opacity=1;
     applyBackground(backgroundSettings);
     input.value='';
     alert('Фон загружен. Нажмите «Сохранить фон».');
@@ -98,6 +162,7 @@ async function importBackgroundFromUrl(){
 }
 
 async function saveBackgroundSettings(){
+  backgroundSettings.opacity = 1;
   try{
     const r=await fetch('/api/background',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(backgroundSettings)});
     const data=await r.json();
@@ -108,6 +173,7 @@ async function saveBackgroundSettings(){
 
 async function removeBackgroundImage(){
   if(!confirm('Удалить фоновое изображение?'))return;
+  backgroundSettings.opacity = 1;
   try{
     const r=await fetch('/api/background',{method:'DELETE'});
     const data=await r.json();
@@ -204,31 +270,127 @@ function selectCategory(id){selectedCategory=id;renderCategories();renderApps()}
 
 function renderApps(){
   const q=(document.getElementById('search')?.value||'').toLowerCase().trim();
+  if(orderEditMode && q) toggleOrderEditMode(false);
   const filtered=apps.filter(a=>{
     const cat=selectedCategory==='all'||(selectedCategory==='favorites'&&a.favorite)||a.category_id===selectedCategory;
     const s=a.name.toLowerCase().includes(q)||a.description.toLowerCase().includes(q)||a.url.toLowerCase().includes(q);
     return cat&&s;
   });
   const d=document.getElementById('dashboard');
+  const qHint=orderEditMode ? '<div class="order-edit-note">↔ Перетаскивайте плитки мышкой. Порядок сохраняется автоматически.</div>' : '';
   d.innerHTML=!filtered.length
     ? '<div class="empty">В этой категории пока нет приложений</div>'
-    : `<div class="group"><div class="group-title">${escapeHtml(currentTitle())}</div><div class="grid">${filtered.map(appCard).join('')}</div></div>`;
+    : `<div class="group">${qHint}<div class="group-title">${escapeHtml(currentTitle())}</div><div class="grid">${filtered.map(appCard).join('')}</div></div>`;
 }
 
 function currentTitle(){if(selectedCategory==='all')return'Все приложения';if(selectedCategory==='favorites')return'Избранное';return categories.find(c=>c.id===selectedCategory)?.name||''}
 
 function appCard(a){
   const size = ['small','medium','large'].includes(a.size) ? a.size : 'medium';
-  return `<article class="app-card size-${size}" onclick="openApp(${a.id})">
+  const dragAttrs = orderEditMode ? `draggable="true" ondragstart="dragStartApp(event,${a.id})" ondragover="dragOverApp(event)" ondragleave="dragLeaveApp(event)" ondrop="dropApp(event,${a.id})" ondragend="dragEndApp(event)"` : '';
+  const dragHandle = orderEditMode ? '<span class="drag-handle" title="Перетащить">⠿</span>' : '';
+  const moveActions = orderEditMode ? `<button title="Переместить вверх" onclick="moveAppByStep(event,${a.id},-1)">↑</button><button title="Переместить вниз" onclick="moveAppByStep(event,${a.id},1)">↓</button>` : '';
+  return `<article class="app-card size-${size}${orderEditMode?' order-editing':''}" data-app-id="${a.id}" ${dragAttrs} onclick="openApp(${a.id})">
+    ${dragHandle}
     ${a.favorite?'<div class="favorite">⭐</div>':''}
     <div class="icon">${iconHtml(a.icon,'app-card-icon')}</div>
     <div class="app-name">${escapeHtml(a.name)}</div>
     <div class="app-description">${escapeHtml(a.description||a.url)}</div>
-    <div class="actions" onclick="event.stopPropagation()"><button onclick="editApp(${a.id})">Изменить</button><button onclick="deleteApp(${a.id})">Удалить</button></div>
+    <div class="actions" onclick="event.stopPropagation()">${moveActions}<button onclick="editApp(${a.id})">Изменить</button><button onclick="deleteApp(${a.id})">Удалить</button></div>
   </article>`;
 }
 
-function openApp(id){const a=apps.find(x=>x.id===id);if(a)window.open(a.url,'_blank','noopener,noreferrer')}
+function openApp(id){if(orderEditMode)return;const a=apps.find(x=>x.id===id);if(a)window.open(a.url,'_blank','noopener,noreferrer')}
+
+function toggleOrderEditMode(force){
+  const search=(document.getElementById('search')?.value||'').trim();
+  if(force === true && search){
+    alert('Очистите поиск, чтобы изменять порядок плиток.');
+    return;
+  }
+  orderEditMode = typeof force === 'boolean' ? force : !orderEditMode;
+  const button=document.getElementById('orderEditButton');
+  if(button){
+    button.textContent=orderEditMode?'✅ Готово':'↔ Порядок';
+    button.classList.toggle('primary',orderEditMode);
+  }
+  const hint=document.getElementById('orderEditHint');
+  if(hint)hint.textContent=orderEditMode?'Перетаскивание включено — порядок сохраняется автоматически.':'';
+  renderApps();
+}
+
+function dragStartApp(event,id){
+  if(!orderEditMode)return;
+  dragAppId=id;
+  event.dataTransfer.effectAllowed='move';
+  event.dataTransfer.setData('text/plain',String(id));
+  event.currentTarget.classList.add('dragging');
+}
+
+function dragOverApp(event){
+  if(!orderEditMode || dragAppId===null)return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect='move';
+  const target=event.currentTarget;
+  if(Number(target.dataset.appId)!==dragAppId)target.classList.add('drop-target');
+}
+
+function dragLeaveApp(event){
+  event.currentTarget.classList.remove('drop-target');
+}
+
+async function dropApp(event,targetId){
+  if(!orderEditMode || dragAppId===null)return;
+  event.preventDefault();
+  const target=event.currentTarget;
+  target.classList.remove('drop-target');
+  const sourceId=dragAppId;
+  dragAppId=null;
+  if(sourceId===targetId)return;
+
+  const grid=target.closest('.grid');
+  if(!grid)return;
+  const visibleIds=[...grid.querySelectorAll('.app-card')].map(el=>Number(el.dataset.appId));
+  const sourceIndex=visibleIds.indexOf(sourceId);
+  const targetIndex=visibleIds.indexOf(targetId);
+  if(sourceIndex<0 || targetIndex<0)return;
+  visibleIds.splice(sourceIndex,1);
+  const targetPosition=visibleIds.indexOf(targetId);
+  const rect=target.getBoundingClientRect();
+  const after=event.clientX > rect.left + rect.width/2;
+  visibleIds.splice(targetPosition + (after?1:0),0,sourceId);
+  await saveVisibleAppOrder(visibleIds);
+}
+
+function dragEndApp(event){
+  event.currentTarget.classList.remove('dragging','drop-target');
+  document.querySelectorAll('.app-card.drop-target').forEach(el=>el.classList.remove('drop-target'));
+  dragAppId=null;
+}
+
+async function saveVisibleAppOrder(visibleIds){
+  const visibleSet=new Set(visibleIds);
+  let cursor=0;
+  const fullIds=apps.map(a=>a.id).map(id=>visibleSet.has(id)?visibleIds[cursor++]:id);
+  const r=await fetch('/api/apps/reorder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:fullIds})});
+  if(!r.ok){alert((await r.json()).detail||'Не удалось сохранить порядок');return}
+  const byId=new Map(apps.map(a=>[a.id,a]));
+  apps=fullIds.map(id=>byId.get(id)).filter(Boolean);
+  renderApps();
+}
+
+async function moveAppByStep(event,id,step){
+  event.stopPropagation();
+  if(!orderEditMode)return;
+  const grid=event.currentTarget.closest('.grid');
+  if(!grid)return;
+  const ids=[...grid.querySelectorAll('.app-card')].map(el=>Number(el.dataset.appId));
+  const index=ids.indexOf(id);
+  const next=index+step;
+  if(index<0 || next<0 || next>=ids.length)return;
+  [ids[index],ids[next]]=[ids[next],ids[index]];
+  await saveVisibleAppOrder(ids);
+}
 function fillCategorySelect(){document.getElementById('categoryId').innerHTML=categories.map(c=>`<option value="${c.id}">${iconHtml(c.icon,'select-icon')} ${escapeHtml(c.name)}</option>`).join('')}
 
 const appIcons=['🚀','🎬','🎥','💻','🌐','📁','🛠️','⚙️','📊','📈','🎮','🎵','📷','📝','📚','🔧','🧰','🗂️','⭐','❤️','🔥','💡','🔐','🖥️','📦','🐳','🧪','🛰️','🗃️','🖱️','⌨️','🧩','🛒','☁️','📌','🔗','📰','🎨','🎧','📱','🖨️','💾','🛍️','🏢','🏡','🚗','✈️','🗺️','💰','📅','✅','❗','❓','🔔'];
@@ -471,10 +633,13 @@ document.addEventListener('DOMContentLoaded',()=>{
   if(themeToggle)themeToggle.addEventListener('click',toggleTheme);
   const themeSelect=document.getElementById('themeSelect');
   if(themeSelect)themeSelect.addEventListener('change',e=>applyTheme(e.target.value));
+  const orderEditButton=document.getElementById('orderEditButton');
+  if(orderEditButton)orderEditButton.addEventListener('click',()=>toggleOrderEditMode());
   const tileSize=document.getElementById('tileSize');
   if(tileSize)tileSize.addEventListener('change',updateTileSizePreview);
   document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeSettingsModal();closeModal();closeCategoryModal()}});
   loadData().catch(e=>{console.error(e);document.getElementById('dashboard').innerHTML='<div class="empty">Ошибка загрузки Dashboard</div>'});
   loadBackgroundConfig();
+  loadAppearanceConfig();
   startEmbyPolling();
 });
