@@ -1,5 +1,6 @@
 let apps = [], categories = [], selectedCategory = "all", embyTimer = null;
-let orderEditMode = false, dragAppId = null;
+let panelEditMode = false, dragAppId = null, dragCategoryId = null;
+let draftAppOrder = null, draftCategoryOrder = null, draftAppChanges = new Map();
 let backgroundSettings = {enabled:false, url:"", opacity:0.35};
 let appearanceSettings = {card_opacity:0.90, card_blur:6, background_blur:2, background_dim:0.55};
 let currentTheme = localStorage.getItem("mdkdv-theme") === "light" ? "light" : "dark";
@@ -268,7 +269,11 @@ async function saveEmbyConfig(){
 async function loadData(){
   const [cr, ar] = await Promise.all([fetch('/api/categories'), fetch('/api/apps')]);
   categories = await cr.json();
-  apps = await ar.json();
+  apps = (await ar.json()).map(a => ({
+    ...a,
+    tile_bg_mode: ['default','color','image'].includes(a.tile_bg_mode) ? a.tile_bg_mode : 'default',
+    tile_bg_value: String(a.tile_bg_value || '').trim()
+  }));
   if(selectedCategory !== "all" && selectedCategory !== "favorites" && !categories.some(c => c.id === selectedCategory)) selectedCategory = "all";
   renderCategories();
   renderApps();
@@ -277,137 +282,238 @@ async function loadData(){
 
 function renderCategories(){
   const nav = document.getElementById('categories');
+  if(!nav)return;
+  const ordered = panelEditMode && Array.isArray(draftCategoryOrder)
+    ? draftCategoryOrder.map(id=>categories.find(c=>c.id===id)).filter(Boolean)
+    : [...categories].sort((a,b)=>(Number(a.sort_order||0)-Number(b.sort_order||0))||(a.id-b.id));
+  nav.classList.toggle('category-editing',panelEditMode);
   nav.innerHTML = `
     <button class="category ${selectedCategory==='all'?'active':''}" onclick="selectCategory('all')">🏠 Все <span class="count">${apps.length}</span></button>
     <button class="category ${selectedCategory==='favorites'?'active':''}" onclick="selectCategory('favorites')">⭐ Избранное <span class="count">${apps.filter(a=>a.favorite).length}</span></button>
-    ${categories.map(c=>`<button class="category ${selectedCategory===c.id?'active':''}" onclick="selectCategory(${c.id})">${iconHtml(c.icon,'category-icon')} ${escapeHtml(c.name)} <span class="count">${c.app_count}</span></button>`).join('')}`;
+    ${ordered.map(c=>{
+      const drag = panelEditMode ? ` draggable="true" ondragstart="dragStartCategory(event,${c.id})" ondragover="dragOverCategory(event)" ondragleave="dragLeaveCategory(event)" ondrop="dropCategory(event,${c.id})" ondragend="dragEndCategory(event)"` : '';
+      const grip = panelEditMode ? '<span class="category-grip" title="Перетащить">⠿</span>' : '';
+      return `<button class="category ${selectedCategory===c.id?'active':''}${panelEditMode?' category-editing-item':''}" data-category-id="${c.id}" onclick="selectCategory(${c.id})"${drag}>${grip}${iconHtml(c.icon,'category-icon')} ${escapeHtml(c.name)} <span class="count">${c.app_count}</span></button>`;
+    }).join('')}`;
 }
 
 function selectCategory(id){selectedCategory=id;renderCategories();renderApps()}
 
 function renderApps(){
   const q=(document.getElementById('search')?.value||'').toLowerCase().trim();
-  if(orderEditMode && q) toggleOrderEditMode(false);
+  if(panelEditMode && q) cancelPanelEditMode();
   const filtered=apps.filter(a=>{
     const cat=selectedCategory==='all'||(selectedCategory==='favorites'&&a.favorite)||a.category_id===selectedCategory;
     const s=a.name.toLowerCase().includes(q)||a.description.toLowerCase().includes(q)||a.url.toLowerCase().includes(q);
     return cat&&s;
   });
   const d=document.getElementById('dashboard');
-  const qHint=orderEditMode ? '<div class="order-edit-note">↔ Перетаскивайте плитки мышкой. Порядок сохраняется автоматически.</div>' : '';
-  d.innerHTML=!filtered.length
+  const qHint=panelEditMode ? '<div class="order-edit-note">✏️ Режим редактирования: перетаскивайте приложения и категории. Нажмите «Сохранить макет».</div>' : '';
+  const orderedFiltered = panelEditMode && Array.isArray(draftAppOrder)
+    ? draftAppOrder.map(id=>apps.find(a=>a.id===id)).filter(Boolean).filter(a=>filtered.some(f=>f.id===a.id))
+    : filtered;
+  d.innerHTML=!orderedFiltered.length
     ? '<div class="empty">В этой категории пока нет приложений</div>'
-    : `<div class="group">${qHint}<div class="group-title">${escapeHtml(currentTitle())}</div><div class="grid">${filtered.map(appCard).join('')}</div></div>`;
+    : `<div class="group">${qHint}<div class="group-title">${escapeHtml(currentTitle())}</div><div class="grid ${panelEditMode?'edit-grid':''}">${orderedFiltered.map(appCard).join('')}</div></div>`;
 }
 
 function currentTitle(){if(selectedCategory==='all')return'Все приложения';if(selectedCategory==='favorites')return'Избранное';return categories.find(c=>c.id===selectedCategory)?.name||''}
 
+function clampNumber(value,min,max,fallback){
+  const n=Number(value);
+  if(!Number.isFinite(n))return fallback;
+  return Math.max(min,Math.min(max,n));
+}
+
+function hexToRgb(value){
+  const m=String(value||'').trim().match(/^#([0-9a-f]{6})$/i);
+  if(!m)return null;
+  const hex=m[1];
+  return `${parseInt(hex.slice(0,2),16)},${parseInt(hex.slice(2,4),16)},${parseInt(hex.slice(4,6),16)}`;
+}
+
+function safeCssUrl(value){
+  return String(value||'').replaceAll('\\','%5C').replaceAll('"','%22').replaceAll("'",'%27').replaceAll('\n','').replaceAll('\r','');
+}
+
+function tileStyle(a){
+  const opacity=clampNumber(a.tile_opacity,0.45,1,0.90);
+  const blur=clampNumber(a.tile_blur,0,20,6);
+  const iconSize=clampNumber(a.tile_icon_size,24,96,48);
+  const titleSize=clampNumber(a.tile_title_size,12,28,17);
+  const bgMode=['default','color','image'].includes(a.tile_bg_mode)?a.tile_bg_mode:'default';
+  const bgValue=String(a.tile_bg_value||'').trim();
+  const rgb=getComputedStyle(document.documentElement).getPropertyValue('--card-rgb').trim()||'25,29,39';
+  let backgroundColor=`rgba(${rgb},${opacity})`;
+  let imageVars='--tile-bg-image:none;--tile-bg-opacity:1;';
+  if(bgMode==='color'){
+    const colorRgb=hexToRgb(bgValue)||rgb;
+    backgroundColor=`rgba(${colorRgb},${opacity})`;
+  }else if(bgMode==='image' && bgValue){
+    imageVars=`--tile-bg-image:url("${safeCssUrl(bgValue)}");--tile-bg-opacity:${opacity};`;
+    backgroundColor=`rgba(${rgb},1)`;
+  }
+  return `style="background-color:${backgroundColor};backdrop-filter:blur(${blur}px);-webkit-backdrop-filter:blur(${blur}px);--tile-blur:${blur}px;--tile-icon-size:${iconSize}px;--tile-title-size:${titleSize}px;${imageVars}"`;
+}
+
 function appCard(a){
   const size = ['mini','small','medium','wide','tall','large','xl','hero'].includes(a.size) ? a.size : 'medium';
-  const dragAttrs = orderEditMode ? `draggable="true" ondragstart="dragStartApp(event,${a.id})" ondragover="dragOverApp(event)" ondragleave="dragLeaveApp(event)" ondrop="dropApp(event,${a.id})" ondragend="dragEndApp(event)"` : '';
-  const dragHandle = orderEditMode ? '<span class="drag-handle" title="Перетащить">⠿</span>' : '';
-  const moveActions = orderEditMode ? `<button title="Переместить вверх" onclick="moveAppByStep(event,${a.id},-1)">↑</button><button title="Переместить вниз" onclick="moveAppByStep(event,${a.id},1)">↓</button>` : '';
-  return `<article class="app-card size-${size}${orderEditMode?' order-editing':''}" data-app-id="${a.id}" ${dragAttrs} onclick="openApp(${a.id})">
+  const dragAttrs = panelEditMode ? `draggable="true" ondragstart="dragStartApp(event,${a.id})" ondragover="dragOverApp(event)" ondragleave="dragLeaveApp(event)" ondrop="dropApp(event,${a.id})" ondragend="dragEndApp(event)"` : '';
+  const dragHandle = panelEditMode ? '<span class="drag-handle" title="Перетащить">⠿</span>' : '';
+  const moveActions = panelEditMode ? `<button title="Переместить вверх" onclick="moveAppByStep(event,${a.id},-1)">↑</button><button title="Переместить вниз" onclick="moveAppByStep(event,${a.id},1)">↓</button>` : '';
+  const editorActions = panelEditMode ? `<button title="Размер" onclick="quickResizeApp(event,${a.id})">📐</button><button title="Дублировать" onclick="duplicateApp(event,${a.id})">📋</button>` : '';
+  const description = String(a.description||'').trim();
+  const url = String(a.url||'').trim();
+  const showDescription = a.tile_show_description === undefined ? true : !!a.tile_show_description;
+  const showUrl = !!a.tile_show_url;
+  const details = [];
+  if(showDescription && description)details.push(`<div class="app-description">${escapeHtml(description)}</div>`);
+  if(showUrl && url)details.push(`<div class="app-url">${escapeHtml(url)}</div>`);
+  const bgValue=String(a.tile_bg_value||'').trim();
+  const hasImageBg=a.tile_bg_mode==='image' && !!bgValue;
+  const bgClass=hasImageBg?' tile-image-background':'';
+  const tileBackground=hasImageBg ? `<img class="tile-background-layer" src="${escapeAttr(bgValue)}" alt="" aria-hidden="true" loading="eager" decoding="async" onerror="this.style.display='none'">` : '';
+  return `<article class="app-card size-${size}${bgClass}${panelEditMode?' order-editing':''}" data-app-id="${a.id}" ${dragAttrs} ${tileStyle(a)} onclick="openApp(${a.id})">
+    ${tileBackground}
     ${dragHandle}
     ${a.favorite?'<div class="favorite">⭐</div>':''}
-    <div class="icon">${iconHtml(a.icon,'app-card-icon')}</div>
-    <div class="app-name">${escapeHtml(a.name)}</div>
-    <div class="app-description">${escapeHtml(a.description||a.url)}</div>
-    <div class="actions" onclick="event.stopPropagation()">${moveActions}<button onclick="editApp(${a.id})">Изменить</button><button onclick="deleteApp(${a.id})">Удалить</button></div>
+    <div class="icon" style="width:${clampNumber(a.tile_icon_size,24,96,48)}px;height:${clampNumber(a.tile_icon_size,24,96,48)}px;font-size:${Math.max(18,Math.round(clampNumber(a.tile_icon_size,24,96,48)*.52))}px;"><div class="app-card-icon-wrap">${iconHtml(a.icon,'app-card-icon')}</div></div>
+    <div class="app-name" style="font-size:${clampNumber(a.tile_title_size,12,28,17)}px;">${escapeHtml(a.name)}</div>
+    ${details.join('')}
+    <div class="actions" onclick="event.stopPropagation()">${moveActions}${editorActions}<button onclick="editApp(${a.id})">Изменить</button><button onclick="deleteApp(${a.id})">Удалить</button></div>
   </article>`;
 }
 
-function openApp(id){if(orderEditMode)return;const a=apps.find(x=>x.id===id);if(a)window.open(a.url,'_blank','noopener,noreferrer')}
+function openApp(id){if(panelEditMode)return;const a=apps.find(x=>x.id===id);if(a)window.open(a.url,'_blank','noopener,noreferrer')}
 
-function toggleOrderEditMode(force){
-  const search=(document.getElementById('search')?.value||'').trim();
-  if(force === true && search){
-    alert('Очистите поиск, чтобы изменять порядок плиток.');
+function togglePanelEditMode(force){
+  if(typeof force==='boolean' && force===false){
+    cancelPanelEditMode();
     return;
   }
-  orderEditMode = typeof force === 'boolean' ? force : !orderEditMode;
-  const button=document.getElementById('orderEditButton');
-  if(button){
-    button.textContent=orderEditMode?'✅ Готово':'↔ Порядок';
-    button.classList.toggle('primary',orderEditMode);
-  }
-  const hint=document.getElementById('orderEditHint');
-  if(hint)hint.textContent=orderEditMode?'Перетаскивание включено — порядок сохраняется автоматически.':'';
+  if(panelEditMode){ savePanelLayout(); return; }
+  panelEditMode=true;
+  draftAppOrder=apps.map(a=>a.id);
+  draftCategoryOrder=[...categories].sort((a,b)=>(Number(a.sort_order||0)-Number(b.sort_order||0))||(a.id-b.id)).map(c=>c.id);
+  draftAppChanges=new Map();
+  updatePanelEditControls();
+  renderCategories();
   renderApps();
+}
+
+function updatePanelEditControls(){
+  const button=document.getElementById('panelEditButton');
+  const cancel=document.getElementById('panelEditCancel');
+  if(button){button.textContent=panelEditMode?'💾 Сохранить макет':'✏️ Редактировать';button.classList.toggle('primary',panelEditMode);}
+  if(cancel)cancel.classList.toggle('hidden',!panelEditMode);
+}
+
+async function savePanelLayout(){
+  if(!panelEditMode)return;
+  try{
+    for(const [id,change] of draftAppChanges.entries()){
+      const a=apps.find(x=>x.id===id);
+      if(!a)continue;
+      const payload={
+        name:a.name,url:a.url,description:a.description,category_id:a.category_id,icon:a.icon,favorite:!!a.favorite,
+        size:change.size||a.size,status_enabled:a.status_enabled!==false,
+        tile_bg_mode:a.tile_bg_mode||'default',tile_bg_value:a.tile_bg_value||'',
+        tile_opacity:Number.isFinite(Number(a.tile_opacity))?Number(a.tile_opacity):0.90,
+        tile_blur:Number.isFinite(Number(a.tile_blur))?Number(a.tile_blur):6,
+        tile_icon_size:Math.round(clampNumber(a.tile_icon_size,24,96,48)),
+        tile_title_size:Math.round(clampNumber(a.tile_title_size,12,28,17)),
+        tile_show_description:a.tile_show_description!==false,
+        tile_show_url:!!a.tile_show_url
+      };
+      const r=await fetch(`/api/apps/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+      if(!r.ok)throw new Error((await r.json()).detail||`Не удалось сохранить размер приложения «${a.name}»`);
+    }
+    if(Array.isArray(draftAppOrder)){
+      const r=await fetch('/api/apps/reorder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:draftAppOrder})});
+      if(!r.ok)throw new Error((await r.json()).detail||'Не удалось сохранить порядок приложений');
+    }
+    if(Array.isArray(draftCategoryOrder)){
+      const r=await fetch('/api/categories/reorder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:draftCategoryOrder})});
+      if(!r.ok)throw new Error((await r.json()).detail||'Не удалось сохранить порядок категорий');
+    }
+    const appMap=new Map(apps.map(a=>[a.id,a]));
+    apps=draftAppOrder.map(id=>appMap.get(id)).filter(Boolean);
+    const catMap=new Map(categories.map(c=>[c.id,c]));
+    categories=draftCategoryOrder.map(id=>catMap.get(id)).filter(Boolean).map((c,i)=>({...c,sort_order:i}));
+    panelEditMode=false;draftAppOrder=null;draftCategoryOrder=null;draftAppChanges=new Map();dragAppId=null;dragCategoryId=null;
+    updatePanelEditControls();renderCategories();renderApps();
+    alert('Макет сохранён.');
+  }catch(e){alert(e.message)}
+}
+
+function cancelPanelEditMode(){
+  panelEditMode=false;draftAppOrder=null;draftCategoryOrder=null;draftAppChanges=new Map();dragAppId=null;dragCategoryId=null;
+  updatePanelEditControls();renderCategories();renderApps();
 }
 
 function dragStartApp(event,id){
-  if(!orderEditMode)return;
-  dragAppId=id;
-  event.dataTransfer.effectAllowed='move';
-  event.dataTransfer.setData('text/plain',String(id));
-  event.currentTarget.classList.add('dragging');
+  if(!panelEditMode)return;
+  dragAppId=id;event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('text/plain',String(id));event.currentTarget.classList.add('dragging');
 }
-
 function dragOverApp(event){
-  if(!orderEditMode || dragAppId===null)return;
-  event.preventDefault();
-  event.dataTransfer.dropEffect='move';
-  const target=event.currentTarget;
-  if(Number(target.dataset.appId)!==dragAppId)target.classList.add('drop-target');
+  if(!panelEditMode||dragAppId===null)return;
+  event.preventDefault();event.dataTransfer.dropEffect='move';
+  const target=event.currentTarget;if(Number(target.dataset.appId)!==dragAppId)target.classList.add('drop-target');
 }
-
-function dragLeaveApp(event){
-  event.currentTarget.classList.remove('drop-target');
-}
-
-async function dropApp(event,targetId){
-  if(!orderEditMode || dragAppId===null)return;
-  event.preventDefault();
-  const target=event.currentTarget;
-  target.classList.remove('drop-target');
-  const sourceId=dragAppId;
-  dragAppId=null;
-  if(sourceId===targetId)return;
-
-  const grid=target.closest('.grid');
-  if(!grid)return;
+function dragLeaveApp(event){event.currentTarget.classList.remove('drop-target');}
+function dropApp(event,targetId){
+  if(!panelEditMode||dragAppId===null)return;
+  event.preventDefault();event.currentTarget.classList.remove('drop-target');
+  const sourceId=dragAppId;dragAppId=null;if(sourceId===targetId)return;
+  const grid=event.currentTarget.closest('.grid');if(!grid)return;
   const visibleIds=[...grid.querySelectorAll('.app-card')].map(el=>Number(el.dataset.appId));
-  const sourceIndex=visibleIds.indexOf(sourceId);
-  const targetIndex=visibleIds.indexOf(targetId);
-  if(sourceIndex<0 || targetIndex<0)return;
+  const sourceIndex=visibleIds.indexOf(sourceId),targetIndex=visibleIds.indexOf(targetId);
+  if(sourceIndex<0||targetIndex<0)return;
   visibleIds.splice(sourceIndex,1);
-  const targetPosition=visibleIds.indexOf(targetId);
-  const rect=target.getBoundingClientRect();
-  const after=event.clientX > rect.left + rect.width/2;
-  visibleIds.splice(targetPosition + (after?1:0),0,sourceId);
-  await saveVisibleAppOrder(visibleIds);
-}
-
-function dragEndApp(event){
-  event.currentTarget.classList.remove('dragging','drop-target');
-  document.querySelectorAll('.app-card.drop-target').forEach(el=>el.classList.remove('drop-target'));
-  dragAppId=null;
-}
-
-async function saveVisibleAppOrder(visibleIds){
-  const visibleSet=new Set(visibleIds);
-  let cursor=0;
-  const fullIds=apps.map(a=>a.id).map(id=>visibleSet.has(id)?visibleIds[cursor++]:id);
-  const r=await fetch('/api/apps/reorder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:fullIds})});
-  if(!r.ok){alert((await r.json()).detail||'Не удалось сохранить порядок');return}
-  const byId=new Map(apps.map(a=>[a.id,a]));
-  apps=fullIds.map(id=>byId.get(id)).filter(Boolean);
+  const rect=event.currentTarget.getBoundingClientRect();
+  const after=event.clientX > rect.left+rect.width/2;
+  const pos=visibleIds.indexOf(targetId)+(after?1:0);visibleIds.splice(pos,0,sourceId);
+  const set=new Set(visibleIds);let cursor=0;
+  draftAppOrder=draftAppOrder.map(id=>set.has(id)?visibleIds[cursor++]:id);
   renderApps();
 }
+function dragEndApp(event){event.currentTarget.classList.remove('dragging','drop-target');document.querySelectorAll('.app-card.drop-target').forEach(el=>el.classList.remove('drop-target'));dragAppId=null;}
 
-async function moveAppByStep(event,id,step){
-  event.stopPropagation();
-  if(!orderEditMode)return;
-  const grid=event.currentTarget.closest('.grid');
-  if(!grid)return;
-  const ids=[...grid.querySelectorAll('.app-card')].map(el=>Number(el.dataset.appId));
-  const index=ids.indexOf(id);
-  const next=index+step;
-  if(index<0 || next<0 || next>=ids.length)return;
-  [ids[index],ids[next]]=[ids[next],ids[index]];
-  await saveVisibleAppOrder(ids);
+function moveAppByStep(event,id,step){
+  event.stopPropagation();if(!panelEditMode)return;
+  const index=draftAppOrder.indexOf(id),next=index+step;if(index<0||next<0||next>=draftAppOrder.length)return;
+  [draftAppOrder[index],draftAppOrder[next]]=[draftAppOrder[next],draftAppOrder[index]];renderApps();
 }
+
+function dragStartCategory(event,id){
+  if(!panelEditMode)return;
+  dragCategoryId=id;event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('text/category',String(id));event.currentTarget.classList.add('dragging');
+}
+function dragOverCategory(event){
+  if(!panelEditMode||dragCategoryId===null)return;event.preventDefault();event.dataTransfer.dropEffect='move';
+  if(Number(event.currentTarget.dataset.categoryId||0)!==dragCategoryId)event.currentTarget.classList.add('drop-target');
+}
+function dragLeaveCategory(event){event.currentTarget.classList.remove('drop-target');}
+function dropCategory(event,targetId){
+  if(!panelEditMode||dragCategoryId===null)return;event.preventDefault();event.currentTarget.classList.remove('drop-target');
+  const sourceId=dragCategoryId;dragCategoryId=null;if(sourceId===targetId)return;
+  const visibleIds=draftCategoryOrder.slice();const si=visibleIds.indexOf(sourceId),ti=visibleIds.indexOf(targetId);if(si<0||ti<0)return;
+  visibleIds.splice(si,1);const rect=event.currentTarget.getBoundingClientRect();const after=event.clientX>rect.left+rect.width/2;visibleIds.splice(visibleIds.indexOf(targetId)+(after?1:0),0,sourceId);
+  draftCategoryOrder=visibleIds;renderCategories();
+}
+function dragEndCategory(event){event.currentTarget.classList.remove('dragging','drop-target');document.querySelectorAll('.category.drop-target').forEach(el=>el.classList.remove('drop-target'));dragCategoryId=null;}
+
+const tileSizeCycle=['mini','small','medium','wide','tall','large','xl','hero'];
+function quickResizeApp(event,id){
+  event.stopPropagation();if(!panelEditMode)return;const a=apps.find(x=>x.id===id);if(!a)return;
+  const current=tileSizeCycle.indexOf(a.size);const next=tileSizeCycle[(current+1)%tileSizeCycle.length];a.size=next;draftAppChanges.set(id,{size:next});renderApps();
+}
+async function duplicateApp(event,id){
+  event.stopPropagation();
+  try{const r=await fetch(`/api/apps/${id}/duplicate`,{method:'POST'});const data=await r.json();if(!r.ok)throw new Error(data.detail||'Не удалось дублировать приложение');await loadData();panelEditMode=true;draftAppOrder=apps.map(a=>a.id);draftCategoryOrder=categories.map(c=>c.id);updatePanelEditControls();renderCategories();renderApps();}
+  catch(e){alert(e.message)}
+}
+
 function fillCategorySelect(){document.getElementById('categoryId').innerHTML=categories.map(c=>`<option value="${c.id}">${iconHtml(c.icon,'select-icon')} ${escapeHtml(c.name)}</option>`).join('')}
 
 const appIcons=['🚀','🎬','🎥','💻','🌐','📁','🛠️','⚙️','📊','📈','🎮','🎵','📷','📝','📚','🔧','🧰','🗂️','⭐','❤️','🔥','💡','🔐','🖥️','📦','🐳','🧪','🛰️','🗃️','🖱️','⌨️','🧩','🛒','☁️','📌','🔗','📰','🎨','🎧','📱','🖨️','💾','🛍️','🏢','🏡','🚗','✈️','🗺️','💰','📅','✅','❗','❓','🔔'];
@@ -516,6 +622,169 @@ function updateTileSizePreview(){
   if(selected)selected.classList.add('active');
 }
 
+function getTileAppearanceFromForm(){
+  const mode=document.getElementById('tileBgMode')?.value||'default';
+  let value='';
+  if(mode==='color') value=document.getElementById('tileBgColor')?.value||'#191d27';
+  if(mode==='image') value=document.getElementById('tileBgImage')?.value.trim()||'';
+  return {
+    tile_bg_mode:mode,
+    tile_bg_value:value,
+    tile_opacity:clampNumber(document.getElementById('tileOpacity')?.value,45,100,90)/100,
+    tile_blur:clampNumber(document.getElementById('tileBlur')?.value,0,20,6),
+    tile_icon_size:Math.round(clampNumber(document.getElementById('tileIconSize')?.value,24,96,48)),
+    tile_title_size:Math.round(clampNumber(document.getElementById('tileTitleSize')?.value,12,28,17)),
+    tile_show_description:!!document.getElementById('tileShowDescription')?.checked,
+    tile_show_url:!!document.getElementById('tileShowUrl')?.checked
+  };
+}
+
+function setTileAppearanceForm(a={}){
+  const mode=['default','color','image'].includes(a.tile_bg_mode)?a.tile_bg_mode:'default';
+  const bgValue=String(a.tile_bg_value||'');
+  const modeEl=document.getElementById('tileBgMode'); if(modeEl)modeEl.value=mode;
+  const colorEl=document.getElementById('tileBgColor'); if(colorEl)colorEl.value=/^#[0-9a-f]{6}$/i.test(bgValue)?bgValue:'#191d27';
+  const imageEl=document.getElementById('tileBgImage'); if(imageEl)imageEl.value=mode==='image'?bgValue:'';
+  const setRange=(id,value)=>{const el=document.getElementById(id);if(el)el.value=String(value);};
+  setRange('tileOpacity',Math.round(clampNumber(a.tile_opacity,0.45,1,0.90)*100));
+  setRange('tileBlur',clampNumber(a.tile_blur,0,20,6));
+  setRange('tileIconSize',Math.round(clampNumber(a.tile_icon_size,24,96,48)));
+  setRange('tileTitleSize',Math.round(clampNumber(a.tile_title_size,12,28,17)));
+  const desc=document.getElementById('tileShowDescription');if(desc)desc.checked=a.tile_show_description!==false;
+  const showUrl=document.getElementById('tileShowUrl');if(showUrl)showUrl.checked=!!a.tile_show_url;
+  updateTileAppearancePreview();
+}
+
+function applyLiveTileAppearancePreview(){
+  const appId=Number(document.getElementById('appId')?.value||0);
+  if(!appId)return;
+  const card=document.querySelector(`.app-card[data-app-id="${appId}"]`);
+  if(!card)return;
+
+  const appearance=getTileAppearanceFromForm();
+  const opacity=appearance.tile_opacity;
+  const blur=appearance.tile_blur;
+  const iconSize=appearance.tile_icon_size;
+  const titleSize=appearance.tile_title_size;
+  const mode=appearance.tile_bg_mode;
+  const value=appearance.tile_bg_value;
+  const rgb=getComputedStyle(document.documentElement).getPropertyValue('--card-rgb').trim()||'25,29,39';
+
+  card.style.setProperty('--tile-blur',`${blur}px`);
+  card.style.setProperty('--tile-icon-size',`${iconSize}px`);
+  card.style.setProperty('--tile-title-size',`${titleSize}px`);
+
+  if(mode==='image' && value){
+    card.classList.add('tile-image-background');
+    card.style.setProperty('--tile-bg-image',`url("${safeCssUrl(value)}")`);
+    card.style.setProperty('--tile-bg-opacity',String(opacity));
+    card.style.backgroundColor=`rgba(${rgb},1)`;
+  }else{
+    card.classList.remove('tile-image-background');
+    card.style.setProperty('--tile-bg-image','none');
+    card.style.setProperty('--tile-bg-opacity','1');
+    if(mode==='color'){
+      const colorRgb=hexToRgb(value)||rgb;
+      card.style.backgroundColor=`rgba(${colorRgb},${opacity})`;
+    }else{
+      card.style.backgroundColor=`rgba(${rgb},${opacity})`;
+    }
+  }
+
+  const icon=card.querySelector(':scope > .icon');
+  const title=card.querySelector(':scope > .app-name');
+  if(icon){
+    icon.style.width=`${iconSize}px`;
+    icon.style.height=`${iconSize}px`;
+    icon.style.fontSize=`${Math.max(18,Math.round(iconSize*.52))}px`;
+  }
+  if(title)title.style.fontSize=`${titleSize}px`;
+}
+
+function updateTileAppearancePreview(){
+  const mode=document.getElementById('tileBgMode')?.value||'default';
+  document.getElementById('tileBgColorRow')?.classList.toggle('hidden',mode!=='color');
+  document.getElementById('tileBgImageRow')?.classList.toggle('hidden',mode!=='image');
+  const opacity=clampNumber(document.getElementById('tileOpacity')?.value,45,100,90)/100;
+  const blur=clampNumber(document.getElementById('tileBlur')?.value,0,20,6);
+  const iconSize=Math.round(clampNumber(document.getElementById('tileIconSize')?.value,24,96,48));
+  const titleSize=Math.round(clampNumber(document.getElementById('tileTitleSize')?.value,12,28,17));
+  const color=document.getElementById('tileBgColor')?.value||'#191d27';
+  const image=document.getElementById('tileBgImage')?.value.trim()||'';
+  const preview=document.getElementById('tileStylePreview');
+  if(preview){
+    const rgb=mode==='color'?(hexToRgb(color)||'25,29,39'):(getComputedStyle(document.documentElement).getPropertyValue('--card-rgb').trim()||'25,29,39');
+    preview.style.backgroundColor=`rgba(${rgb},${mode==='image'?1:opacity})`;
+    preview.style.backdropFilter=`blur(${blur}px)`;
+    preview.style.webkitBackdropFilter=`blur(${blur}px)`;
+    preview.style.setProperty('--preview-tile-blur',`${blur}px`);
+    preview.style.setProperty('--preview-image-opacity',String(opacity));
+    preview.style.setProperty('--preview-image', (mode==='image'&&image) ? `url("${safeCssUrl(image)}")` : 'none');
+    preview.style.backgroundImage='none';
+    preview.classList.toggle('preview-has-image',mode==='image'&&!!image);
+    const icon=preview.querySelector('.preview-icon'); if(icon){icon.style.width=`${iconSize}px`;icon.style.height=`${iconSize}px`;icon.style.fontSize=`${Math.max(18,Math.round(iconSize*.52))}px`;}
+    const title=preview.querySelector('.preview-title'); if(title)title.style.fontSize=`${titleSize}px`;
+    const desc=preview.querySelector('.preview-description'); if(desc){desc.classList.toggle('hidden',!document.getElementById('tileShowDescription')?.checked); desc.textContent=document.getElementById('description')?.value.trim()||'Краткое описание приложения';}
+    const url=preview.querySelector('.preview-url'); if(url){url.classList.toggle('hidden',!document.getElementById('tileShowUrl')?.checked); url.textContent=document.getElementById('url')?.value.trim()||'https://example.com';}
+  }
+  const valueEls={tileOpacityValue:`${Math.round(opacity*100)}%`,tileBlurValue:`${blur} px`,tileIconSizeValue:`${iconSize} px`,tileTitleSizeValue:`${titleSize} px`};
+  for(const [id,value] of Object.entries(valueEls)){const el=document.getElementById(id);if(el)el.textContent=value;}
+  applyLiveTileAppearancePreview();
+}
+
+async function persistTileAppearanceForExistingApp(){
+  const id=Number(document.getElementById('appId')?.value||0);
+  if(!id)return;
+  const a=apps.find(x=>x.id===id);
+  if(!a)return;
+  const item={
+    name:document.getElementById('name').value.trim(),
+    url:document.getElementById('url').value.trim(),
+    description:document.getElementById('description').value.trim(),
+    category_id:Number(document.getElementById('categoryId').value),
+    icon:document.getElementById('icon').value.trim()||'🚀',
+    favorite:document.getElementById('favorite').checked,
+    size:document.getElementById('tileSize').value,
+    ...getTileAppearanceFromForm()
+  };
+  const r=await fetch(`/api/apps/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(item)});
+  if(!r.ok){const data=await r.json().catch(()=>({}));throw new Error(data.detail||'Не удалось сохранить фон плитки');}
+  const updated=await r.json();
+  apps=apps.map(x=>x.id===id ? {...x,...updated} : x);
+  renderApps();
+}
+
+async function uploadTileBackgroundFile(event){
+  const file=event.target.files?.[0];event.target.value='';if(!file)return;
+  try{
+    const form=new FormData();form.append('file',file);
+    const r=await fetch('/api/tile-background/upload',{method:'POST',body:form});
+    const data=await r.json();if(!r.ok)throw new Error(data.detail||'Не удалось загрузить изображение');
+    const mode=document.getElementById('tileBgMode');if(mode)mode.value='image';
+    const input=document.getElementById('tileBgImage');if(input)input.value=data.url||'';
+    updateTileAppearancePreview();
+    await persistTileAppearanceForExistingApp();
+  }catch(e){alert(e.message)}
+}
+
+async function importTileBackgroundFromUrl(){
+  const input=document.getElementById('tileBgImage');const url=input?.value.trim();
+  if(!url){alert('Укажите URL изображения');return}
+  try{
+    let data;
+    if(url.startsWith('/backgrounds/')){
+      data={url};
+    }else{
+      const r=await fetch('/api/tile-background/from-url',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});
+      data=await r.json();if(!r.ok)throw new Error(data.detail||'Не удалось скачать изображение');
+    }
+    input.value=data.url||url;
+    const mode=document.getElementById('tileBgMode');if(mode)mode.value='image';
+    updateTileAppearancePreview();
+    await persistTileAppearanceForExistingApp();
+  }catch(e){alert(e.message)}
+}
+
 function openAppModal(a=null){
   document.getElementById('modal').classList.remove('hidden');
   document.getElementById('modalTitle').textContent=a?'Изменить приложение':'Добавить приложение';
@@ -528,6 +797,7 @@ function openAppModal(a=null){
   renderIconChoices('appIconChoices','icon',appIcons);
   document.getElementById('favorite').checked=!!a?.favorite;
   document.getElementById('tileSize').value=['mini','small','medium','wide','tall','large','xl','hero'].includes(a?.size)?a.size:'medium';
+  setTileAppearanceForm(a||{});
   fillCategorySelect();
   if(a)document.getElementById('categoryId').value=a.category_id;
   else if(typeof selectedCategory==='number')document.getElementById('categoryId').value=selectedCategory;
@@ -547,7 +817,8 @@ async function saveApp(e){
     category_id:Number(document.getElementById('categoryId').value),
     icon:document.getElementById('icon').value.trim()||'🚀',
     favorite:document.getElementById('favorite').checked,
-    size:document.getElementById('tileSize').value
+    size:document.getElementById('tileSize').value,
+    ...getTileAppearanceFromForm()
   };
   const r=await fetch(id?`/api/apps/${id}`:'/api/apps',{method:id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(item)});
   if(!r.ok){alert((await r.json()).detail||'Ошибка сохранения');return}
@@ -640,6 +911,7 @@ async function importSettingsFile(event){
 }
 
 function escapeHtml(v){return String(v??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;')}
+function escapeAttr(v){return escapeHtml(v)}
 
 document.addEventListener('DOMContentLoaded',()=>{
   applyTheme(currentTheme,false);
@@ -651,10 +923,16 @@ document.addEventListener('DOMContentLoaded',()=>{
   if(themeToggle)themeToggle.addEventListener('click',toggleTheme);
   const themeSelect=document.getElementById('themeSelect');
   if(themeSelect)themeSelect.addEventListener('change',e=>applyTheme(e.target.value));
-  const orderEditButton=document.getElementById('orderEditButton');
-  if(orderEditButton)orderEditButton.addEventListener('click',()=>toggleOrderEditMode());
+  const panelEditButton=document.getElementById('panelEditButton');
+  if(panelEditButton)panelEditButton.addEventListener('click',()=>togglePanelEditMode());
+  const panelEditCancel=document.getElementById('panelEditCancel');
+  if(panelEditCancel)panelEditCancel.addEventListener('click',cancelPanelEditMode);
   const tileSize=document.getElementById('tileSize');
   if(tileSize)tileSize.addEventListener('change',updateTileSizePreview);
+  ['tileBgMode','tileBgColor','tileBgImage','tileOpacity','tileBlur','tileIconSize','tileTitleSize','tileShowDescription','tileShowUrl'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el)el.addEventListener(el.type==='range'||el.type==='checkbox'||el.type==='color'?'input':'change',updateTileAppearancePreview);
+  });
   document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeSettingsModal();closeModal();closeCategoryModal()}});
   loadData().catch(e=>{console.error(e);document.getElementById('dashboard').innerHTML='<div class="empty">Ошибка загрузки Dashboard</div>'});
   loadBackgroundConfig();

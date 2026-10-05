@@ -27,12 +27,14 @@ DATA_DIR = BASE_DIR.parent / "data"
 DB_PATH = DATA_DIR / "dashboard.db"
 ICONS_DIR = DATA_DIR / "icons"
 BACKGROUNDS_DIR = DATA_DIR / "backgrounds"
+TILE_BACKGROUNDS_DIR = DATA_DIR / "tile-backgrounds"
 STATIC_DIR = BASE_DIR / "static"
 DEFAULT_BACKGROUND_SOURCE = STATIC_DIR / "assets" / "default-background.png"
 DEFAULT_BACKGROUND_NAME = "my-dashboardkdv-default.png"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 ICONS_DIR.mkdir(parents=True, exist_ok=True)
 BACKGROUNDS_DIR.mkdir(parents=True, exist_ok=True)
+TILE_BACKGROUNDS_DIR.mkdir(parents=True, exist_ok=True)
 
 APP_TILE_SIZES = {'mini', 'small', 'medium', 'wide', 'tall', 'large', 'xl', 'hero'}
 MAX_ICON_BYTES = 5 * 1024 * 1024
@@ -54,10 +56,11 @@ ALLOWED_ICON_MIME = {
     "image/vnd.microsoft.icon": ".ico",
 }
 
-app = FastAPI(title="My DashboardKDV", version="2.1.0")
+app = FastAPI(title="My DashboardKDV", version="2.3.9")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/icons", StaticFiles(directory=ICONS_DIR), name="icons")
 app.mount("/backgrounds", StaticFiles(directory=BACKGROUNDS_DIR), name="backgrounds")
+app.mount("/tile-backgrounds", StaticFiles(directory=TILE_BACKGROUNDS_DIR), name="tile-backgrounds")
 
 
 class Category(BaseModel):
@@ -74,12 +77,21 @@ class AppItem(BaseModel):
     favorite: bool = False
     size: Literal['mini', 'small', 'medium', 'wide', 'tall', 'large', 'xl', 'hero'] = 'medium'
     status_enabled: bool = True
+    tile_bg_mode: Literal['default', 'color', 'image'] = 'default'
+    tile_bg_value: str = Field(default="", max_length=2048)
+    tile_opacity: float = Field(default=0.90, ge=0.45, le=1.0)
+    tile_blur: float = Field(default=6.0, ge=0.0, le=20.0)
+    tile_icon_size: int = Field(default=48, ge=24, le=96)
+    tile_title_size: int = Field(default=17, ge=12, le=28)
+    tile_show_description: bool = True
+    tile_show_url: bool = False
 
 
 class ExportCategory(BaseModel):
     id: int
     name: str = Field(min_length=1, max_length=100)
     icon: str = Field(default="📁", max_length=500)
+    sort_order: int = 0
 
 
 class ExportApp(BaseModel):
@@ -92,6 +104,14 @@ class ExportApp(BaseModel):
     favorite: bool = False
     size: Literal['mini', 'small', 'medium', 'wide', 'tall', 'large', 'xl', 'hero'] = 'medium'
     status_enabled: bool = True
+    tile_bg_mode: Literal['default', 'color', 'image'] = 'default'
+    tile_bg_value: str = Field(default="", max_length=2048)
+    tile_opacity: float = Field(default=0.90, ge=0.45, le=1.0)
+    tile_blur: float = Field(default=6.0, ge=0.0, le=20.0)
+    tile_icon_size: int = Field(default=48, ge=24, le=96)
+    tile_title_size: int = Field(default=17, ge=12, le=28)
+    tile_show_description: bool = True
+    tile_show_url: bool = False
     sort_order: int = 0
 
 
@@ -130,7 +150,8 @@ def init_db():
         conn.execute(
             """CREATE TABLE IF NOT EXISTS categories (
             id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
-            icon TEXT NOT NULL DEFAULT '📁')"""
+            icon TEXT NOT NULL DEFAULT '📁',
+            sort_order INTEGER NOT NULL DEFAULT 0)"""
         )
         conn.execute(
             """CREATE TABLE IF NOT EXISTS apps (
@@ -142,15 +163,51 @@ def init_db():
             sort_order INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY(category_id) REFERENCES categories(id) ON UPDATE CASCADE ON DELETE RESTRICT)"""
         )
+        category_columns = {row['name'] for row in conn.execute("PRAGMA table_info(categories)").fetchall()}
+        if 'sort_order' not in category_columns:
+            conn.execute("ALTER TABLE categories ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+        if conn.execute("SELECT COUNT(*) FROM categories WHERE sort_order != 0").fetchone()[0] == 0:
+            conn.execute("UPDATE categories SET sort_order = id - 1")
+
         app_columns = {row['name'] for row in conn.execute("PRAGMA table_info(apps)").fetchall()}
+        added_tile_icon_size = False
+        added_tile_title_size = False
         if 'size' not in app_columns:
             conn.execute("ALTER TABLE apps ADD COLUMN size TEXT NOT NULL DEFAULT 'medium'")
         if 'status_enabled' not in app_columns:
             conn.execute("ALTER TABLE apps ADD COLUMN status_enabled INTEGER NOT NULL DEFAULT 1")
         if 'sort_order' not in app_columns:
             conn.execute("ALTER TABLE apps ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+        for column_sql in [
+            "ALTER TABLE apps ADD COLUMN tile_bg_mode TEXT NOT NULL DEFAULT 'default'",
+            "ALTER TABLE apps ADD COLUMN tile_bg_value TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE apps ADD COLUMN tile_opacity REAL NOT NULL DEFAULT 0.90",
+            "ALTER TABLE apps ADD COLUMN tile_blur REAL NOT NULL DEFAULT 6.0",
+            "ALTER TABLE apps ADD COLUMN tile_icon_size INTEGER NOT NULL DEFAULT 48",
+            "ALTER TABLE apps ADD COLUMN tile_title_size INTEGER NOT NULL DEFAULT 17",
+            "ALTER TABLE apps ADD COLUMN tile_show_description INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE apps ADD COLUMN tile_show_url INTEGER NOT NULL DEFAULT 0",
+        ]:
+            column_name = column_sql.split('ADD COLUMN ', 1)[1].split()[0]
+            if column_name not in app_columns:
+                conn.execute(column_sql)
+                app_columns.add(column_name)
+                if column_name == 'tile_icon_size':
+                    added_tile_icon_size = True
+                if column_name == 'tile_title_size':
+                    added_tile_title_size = True
         conn.execute("UPDATE apps SET status_enabled=1 WHERE status_enabled IS NULL")
-        conn.execute("UPDATE apps SET size='medium' WHERE size NOT IN ('small','medium','large') OR size IS NULL")
+        conn.execute("UPDATE apps SET size='medium' WHERE size NOT IN ('mini','small','medium','wide','tall','large','xl','hero') OR size IS NULL")
+        conn.execute("UPDATE apps SET tile_bg_mode='default' WHERE tile_bg_mode NOT IN ('default','color','image') OR tile_bg_mode IS NULL")
+        conn.execute("UPDATE apps SET tile_bg_value='' WHERE tile_bg_value IS NULL")
+        conn.execute("UPDATE apps SET tile_opacity=0.90 WHERE tile_opacity IS NULL OR tile_opacity < 0.45 OR tile_opacity > 1.0")
+        conn.execute("UPDATE apps SET tile_blur=6.0 WHERE tile_blur IS NULL OR tile_blur < 0 OR tile_blur > 20")
+        conn.execute("UPDATE apps SET tile_icon_size=48 WHERE tile_icon_size IS NULL OR tile_icon_size < 24 OR tile_icon_size > 96")
+        conn.execute("UPDATE apps SET tile_title_size=17 WHERE tile_title_size IS NULL OR tile_title_size < 12 OR tile_title_size > 28")
+        if added_tile_icon_size:
+            conn.execute("UPDATE apps SET tile_icon_size = CASE size WHEN 'mini' THEN 36 WHEN 'small' THEN 40 WHEN 'large' THEN 60 WHEN 'xl' THEN 72 WHEN 'hero' THEN 72 ELSE 48 END")
+        if added_tile_title_size:
+            conn.execute("UPDATE apps SET tile_title_size = CASE size WHEN 'small' THEN 15 WHEN 'large' THEN 19 WHEN 'xl' THEN 21 WHEN 'hero' THEN 21 ELSE 17 END")
         if conn.execute("SELECT COUNT(*) FROM apps WHERE sort_order != 0").fetchone()[0] == 0:
             conn.execute("UPDATE apps SET sort_order = id - 1")
 
@@ -200,8 +257,8 @@ def init_db():
             )
         if conn.execute("SELECT COUNT(*) FROM categories").fetchone()[0] == 0:
             conn.executemany(
-                "INSERT INTO categories(name, icon) VALUES (?, ?)",
-                [("Мои приложения", "🚀"), ("Инструменты", "🛠️"), ("Мониторинг", "📊"), ("Docker", "🐳")],
+                "INSERT INTO categories(name, icon, sort_order) VALUES (?, ?, ?)",
+                [("Мои приложения", "🚀", 0), ("Инструменты", "🛠️", 1), ("Мониторинг", "📊", 2), ("Docker", "🐳", 3)],
             )
         if conn.execute("SELECT COUNT(*) FROM apps").fetchone()[0] == 0:
             cat = {r["name"]: r["id"] for r in conn.execute("SELECT id,name FROM categories")}
@@ -230,8 +287,8 @@ def index():
 def categories():
     with db() as conn:
         rows = conn.execute(
-            """SELECT c.id,c.name,c.icon,COUNT(a.id) AS app_count FROM categories c
-            LEFT JOIN apps a ON a.category_id=c.id GROUP BY c.id ORDER BY c.id"""
+            """SELECT c.id,c.name,c.icon,c.sort_order,COUNT(a.id) AS app_count FROM categories c
+            LEFT JOIN apps a ON a.category_id=c.id GROUP BY c.id ORDER BY c.sort_order,c.id"""
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -241,7 +298,7 @@ def create_category(item: Category):
     try:
         with db() as conn:
             cur = conn.execute(
-                "INSERT INTO categories(name,icon) VALUES (?,?)", (item.name.strip(), item.icon.strip() or "📁")
+                "INSERT INTO categories(name,icon,sort_order) VALUES (?,?,?)", (item.name.strip(), item.icon.strip() or "📁", int(conn.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM categories").fetchone()["next_order"]))
             )
             return {"id": cur.lastrowid, **item.model_dump()}
     except sqlite3.IntegrityError:
@@ -273,11 +330,29 @@ def delete_category(category_id: int):
     return {"ok": True}
 
 
+class ReorderCategories(BaseModel):
+    ids: list[int] = Field(default_factory=list)
+
+
+@app.post("/api/categories/reorder")
+def reorder_categories(payload: ReorderCategories):
+    incoming = [int(x) for x in payload.ids]
+    with db() as conn:
+        rows = conn.execute("SELECT id FROM categories ORDER BY sort_order,id").fetchall()
+        current_ids = [int(r["id"]) for r in rows]
+        if len(incoming) != len(current_ids) or set(incoming) != set(current_ids):
+            raise HTTPException(400, "Список категорий для сортировки не совпадает с текущим списком")
+        conn.executemany("UPDATE categories SET sort_order=? WHERE id=?", [(position, category_id) for position, category_id in enumerate(incoming)])
+    return {"ok": True, "count": len(incoming)}
+
+
 @app.get("/api/apps")
 def list_apps():
     with db() as conn:
         rows = conn.execute(
             """SELECT a.id,a.name,a.url,a.description,a.category_id,a.icon,a.favorite,a.size,a.status_enabled,a.sort_order,
+            a.tile_bg_mode,a.tile_bg_value,a.tile_opacity,a.tile_blur,a.tile_icon_size,a.tile_title_size,
+            a.tile_show_description,a.tile_show_url,
             c.name AS category_name,c.icon AS category_icon FROM apps a JOIN categories c ON c.id=a.category_id
             ORDER BY a.sort_order,a.id"""
         ).fetchall()
@@ -306,8 +381,12 @@ def create_app(item: AppItem):
             raise HTTPException(400, "Категория не найдена")
         next_order = conn.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM apps").fetchone()["next_order"]
         cur = conn.execute(
-            "INSERT INTO apps(name,url,description,category_id,icon,favorite,size,status_enabled,sort_order) VALUES (?,?,?,?,?,?,?,?,?)",
-            (item.name.strip(), item.url.strip(), item.description.strip(), item.category_id, item.icon.strip() or "🚀", int(item.favorite), item.size, int(item.status_enabled), int(next_order)),
+            """INSERT INTO apps(name,url,description,category_id,icon,favorite,size,status_enabled,sort_order,
+            tile_bg_mode,tile_bg_value,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_show_description,tile_show_url)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (item.name.strip(), item.url.strip(), item.description.strip(), item.category_id, item.icon.strip() or "🚀", int(item.favorite),
+             item.size, int(item.status_enabled), int(next_order), item.tile_bg_mode, item.tile_bg_value.strip(), item.tile_opacity,
+             item.tile_blur, item.tile_icon_size, item.tile_title_size, int(item.tile_show_description), int(item.tile_show_url)),
         )
         return {"id": cur.lastrowid, **item.model_dump()}
 
@@ -318,12 +397,38 @@ def update_app(app_id: int, item: AppItem):
         if not conn.execute("SELECT id FROM categories WHERE id=?", (item.category_id,)).fetchone():
             raise HTTPException(400, "Категория не найдена")
         cur = conn.execute(
-            "UPDATE apps SET name=?,url=?,description=?,category_id=?,icon=?,favorite=?,size=?,status_enabled=? WHERE id=?",
-            (item.name.strip(), item.url.strip(), item.description.strip(), item.category_id, item.icon.strip() or "🚀", int(item.favorite), item.size, int(item.status_enabled), app_id),
+            """UPDATE apps SET name=?,url=?,description=?,category_id=?,icon=?,favorite=?,size=?,status_enabled=?,
+            tile_bg_mode=?,tile_bg_value=?,tile_opacity=?,tile_blur=?,tile_icon_size=?,tile_title_size=?,tile_show_description=?,tile_show_url=?
+            WHERE id=?""",
+            (item.name.strip(), item.url.strip(), item.description.strip(), item.category_id, item.icon.strip() or "🚀", int(item.favorite),
+             item.size, int(item.status_enabled), item.tile_bg_mode, item.tile_bg_value.strip(), item.tile_opacity, item.tile_blur,
+             item.tile_icon_size, item.tile_title_size, int(item.tile_show_description), int(item.tile_show_url), app_id),
         )
         if not cur.rowcount:
             raise HTTPException(404, "Приложение не найдено")
     return {"id": app_id, **item.model_dump()}
+
+
+@app.post("/api/apps/{app_id}/duplicate")
+def duplicate_app(app_id: int):
+    with db() as conn:
+        row = conn.execute(
+            """SELECT name,url,description,category_id,icon,favorite,size,status_enabled,
+            tile_bg_mode,tile_bg_value,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_show_description,tile_show_url
+            FROM apps WHERE id=?""",
+            (app_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "Приложение не найдено")
+        next_order = conn.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM apps").fetchone()["next_order"]
+        cur = conn.execute(
+            """INSERT INTO apps(name,url,description,category_id,icon,favorite,size,status_enabled,sort_order,
+            tile_bg_mode,tile_bg_value,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_show_description,tile_show_url)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (f"{row['name']} (копия)", row["url"], row["description"], row["category_id"], row["icon"], row["favorite"], row["size"], row["status_enabled"], int(next_order),
+             row["tile_bg_mode"], row["tile_bg_value"], row["tile_opacity"], row["tile_blur"], row["tile_icon_size"], row["tile_title_size"], row["tile_show_description"], row["tile_show_url"]),
+        )
+    return {"id": cur.lastrowid}
 
 
 @app.delete("/api/apps/{app_id}")
@@ -456,6 +561,20 @@ def _save_background_bytes(data: bytes, ext: str) -> str:
             (rel,),
         )
     return rel
+
+
+def _save_tile_background_bytes(data: bytes, ext: str) -> str:
+    """Save an application-tile background separately from the global dashboard background."""
+    if not data:
+        raise HTTPException(400, "Фоновое изображение плитки пустое")
+    if len(data) > MAX_BACKGROUND_BYTES:
+        raise HTTPException(413, "Фоновое изображение плитки слишком большое. Максимум 8 МБ")
+    if ext not in ALLOWED_BACKGROUND_EXTENSIONS:
+        raise HTTPException(400, "Поддерживаются PNG, JPG, WEBP и GIF")
+    name = f"{uuid.uuid4().hex}{ext}"
+    path = TILE_BACKGROUNDS_DIR / name
+    path.write_bytes(data)
+    return f"/api/tile-background/{name}"
 
 
 def _appearance_settings() -> dict:
@@ -597,6 +716,41 @@ def icon_from_url(payload: dict):
         raise HTTPException(400, "Укажите URL изображения")
     data, ext = _download_image(url)
     return {"icon": _save_icon_bytes(data, ext)}
+
+
+@app.get("/api/tile-background/{filename}")
+def serve_tile_background(filename: str):
+    # Serve tile backgrounds through an explicit API route as well as the
+    # static mount. This keeps existing stored paths compatible while avoiding
+    # browser/cache routing surprises after a Dashboard refresh.
+    safe_name = Path(filename).name
+    path = TILE_BACKGROUNDS_DIR / safe_name
+    if not path.is_file():
+        raise HTTPException(404, "Фон плитки не найден")
+    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return FileResponse(path, media_type=mime, headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
+@app.post("/api/tile-background/upload")
+async def upload_tile_background(file: UploadFile = File(...)):
+    """Save a tile-specific background in the persistent backgrounds directory."""
+    ext = _safe_background_extension(file.filename or "", file.content_type or "")
+    if not ext:
+        raise HTTPException(400, "Поддерживаются PNG, JPG, WEBP и GIF")
+    data = await file.read(MAX_BACKGROUND_BYTES + 1)
+    return {"url": _save_tile_background_bytes(data, ext)}
+
+
+@app.post("/api/tile-background/from-url")
+def tile_background_from_url(payload: dict):
+    """Download a tile-specific background and save it persistently."""
+    url = str(payload.get("url", "")).strip()
+    if not url:
+        raise HTTPException(400, "Укажите URL изображения")
+    if url.startswith(("/backgrounds/", "/tile-backgrounds/")):
+        return {"url": url}
+    data, ext = _download_background(url)
+    return {"url": _save_tile_background_bytes(data, ext)}
 
 
 class FaviconParser(HTMLParser):
@@ -917,8 +1071,10 @@ def export_settings(theme: str = "dark"):
     import base64
 
     with db() as conn:
-        categories = [dict(r) for r in conn.execute("SELECT id,name,icon FROM categories ORDER BY id").fetchall()]
-        apps = [dict(r) for r in conn.execute("SELECT id,name,url,description,category_id,icon,favorite,size,status_enabled,sort_order FROM apps ORDER BY sort_order,id").fetchall()]
+        categories = [dict(r) for r in conn.execute("SELECT id,name,icon,sort_order FROM categories ORDER BY sort_order,id").fetchall()]
+        apps = [dict(r) for r in conn.execute("""SELECT id,name,url,description,category_id,icon,favorite,size,status_enabled,sort_order,
+        tile_bg_mode,tile_bg_value,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_show_description,tile_show_url
+        FROM apps ORDER BY sort_order,id""").fetchall()]
     for item in apps:
         item["favorite"] = bool(item["favorite"])
 
@@ -931,7 +1087,7 @@ def export_settings(theme: str = "dark"):
         background_export["data"] = "data:%s;base64,%s" % (mime, base64.b64encode(bg_file.read_bytes()).decode("ascii"))
 
     return {
-        "version": 5,
+        "version": 6,
         "app_name": "My DashboardKDV",
         "theme": "light" if theme == "light" else "dark",
         "exported_at": datetime.now(timezone.utc).isoformat(),
@@ -953,8 +1109,8 @@ def import_settings(settings: DashboardSettings):
             conn.execute("DELETE FROM categories")
             for category in settings.categories:
                 cur = conn.execute(
-                    "INSERT INTO categories(name,icon) VALUES (?,?)",
-                    (category.name.strip(), category.icon.strip() or "📁"),
+                    "INSERT INTO categories(name,icon,sort_order) VALUES (?,?,?)",
+                    (category.name.strip(), category.icon.strip() or "📁", int(getattr(category, "sort_order", 0))),
                 )
                 old_to_new[category.id] = cur.lastrowid
             has_explicit_order = any(getattr(app_item, "sort_order", 0) != 0 for app_item in settings.apps)
@@ -964,7 +1120,9 @@ def import_settings(settings: DashboardSettings):
                     raise ValueError(f"Категория для приложения «{app_item.name}» не найдена")
                 sort_order = int(app_item.sort_order) if has_explicit_order else index
                 conn.execute(
-                    "INSERT INTO apps(name,url,description,category_id,icon,favorite,size,sort_order) VALUES (?,?,?,?,?,?,?,?)",
+                    """INSERT INTO apps(name,url,description,category_id,icon,favorite,size,status_enabled,sort_order,
+                    tile_bg_mode,tile_bg_value,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_show_description,tile_show_url)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         app_item.name.strip(),
                         app_item.url.strip(),
@@ -975,6 +1133,14 @@ def import_settings(settings: DashboardSettings):
                         app_item.size if app_item.size in APP_TILE_SIZES else "medium",
                         int(app_item.status_enabled),
                         sort_order,
+                        app_item.tile_bg_mode,
+                        app_item.tile_bg_value.strip(),
+                        app_item.tile_opacity,
+                        app_item.tile_blur,
+                        app_item.tile_icon_size,
+                        app_item.tile_title_size,
+                        int(app_item.tile_show_description),
+                        int(app_item.tile_show_url),
                     ),
                 )
             emby = settings.model_dump().get("emby") if hasattr(settings, "model_dump") else None

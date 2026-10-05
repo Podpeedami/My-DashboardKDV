@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>My DashboardKDV</title>
-  <link rel="stylesheet" href="/static/style.css?v=24">
+  <link rel="stylesheet" href="/static/style.css?v=37">
 </head>
 <body>
 <div class="background"><div id="backgroundImage" class="background-image"></div></div>
@@ -15,7 +15,7 @@
       <div class="brand">My DashboardKDV</div>
       <h1>Все приложения в одном месте</h1>
     </div>
-    <div class="header-actions"><button id="themeToggle" type="button">☀️ Светлая</button><button id="settingsButton" type="button">⚙ Настройки</button><button id="orderEditButton" type="button">↔ Порядок</button><button class="primary" onclick="openAppModal()">＋ Приложение</button></div>
+    <div class="header-actions"><button id="themeToggle" type="button">☀️ Светлая</button><button id="settingsButton" type="button">⚙ Настройки</button><button id="panelEditButton" type="button">✏️ Редактировать</button><button id="panelEditCancel" type="button" class="hidden">✖ Отмена</button><button class="primary" onclick="openAppModal()">＋ Приложение</button></div>
   </header>
 
   <section class="toolbar">
@@ -89,6 +89,58 @@
         </div>
         <span>Мини • Маленькая • Обычная • Широкая • Высокая • Большая • XL • Герой. Размер сохраняется отдельно для каждого приложения.</span>
       </div>
+
+      <section class="tile-appearance-editor">
+        <h3>🎨 Оформление плитки</h3>
+        <label>Фон плитки
+          <select id="tileBgMode" onchange="updateTileAppearancePreview()">
+            <option value="default">По умолчанию</option>
+            <option value="color">Свой цвет</option>
+            <option value="image">Изображение</option>
+          </select>
+        </label>
+        <div id="tileBgColorRow" class="tile-appearance-row hidden">
+          <label>Цвет фона
+            <input id="tileBgColor" type="color" value="#191d27" oninput="updateTileAppearancePreview()">
+          </label>
+        </div>
+        <div id="tileBgImageRow" class="tile-appearance-row hidden">
+          <label>Изображение фона
+            <input id="tileBgImage" maxlength="2048" placeholder="URL изображения или /icons/..." oninput="updateTileAppearancePreview()">
+          </label>
+          <div class="icon-source-row">
+            <label class="icon-source-button">🖼 Выбрать файл
+              <input type="file" accept=".png,.jpg,.jpeg,.webp,.gif,.ico,image/png,image/jpeg,image/webp,image/gif,image/x-icon" onchange="uploadTileBackgroundFile(event)">
+            </label>
+            <button type="button" class="icon-source-button" onclick="importTileBackgroundFromUrl()">🌐 Загрузить URL</button>
+          </div>
+        </div>
+        <div class="tile-style-grid">
+          <label>Прозрачность <span id="tileOpacityValue">90%</span>
+            <input id="tileOpacity" class="range-input" type="range" min="45" max="100" value="90" oninput="updateTileAppearancePreview()">
+          </label>
+          <label>Размытие <span id="tileBlurValue">6 px</span>
+            <input id="tileBlur" class="range-input" type="range" min="0" max="20" value="6" oninput="updateTileAppearancePreview()">
+          </label>
+          <label>Размер иконки <span id="tileIconSizeValue">48 px</span>
+            <input id="tileIconSize" class="range-input" type="range" min="24" max="96" value="48" oninput="updateTileAppearancePreview()">
+          </label>
+          <label>Размер названия <span id="tileTitleSizeValue">17 px</span>
+            <input id="tileTitleSize" class="range-input" type="range" min="12" max="28" value="17" oninput="updateTileAppearancePreview()">
+          </label>
+        </div>
+        <div class="tile-style-checks">
+          <label class="check"><input id="tileShowDescription" type="checkbox" checked onchange="updateTileAppearancePreview()"><span>Показывать описание</span></label>
+          <label class="check"><input id="tileShowUrl" type="checkbox" onchange="updateTileAppearancePreview()"><span>Показывать URL</span></label>
+        </div>
+        <div id="tileStylePreview" class="tile-style-preview">
+          <div class="preview-icon">🚀</div>
+          <strong class="preview-title">Название приложения</strong>
+          <span class="preview-description">Краткое описание приложения</span>
+          <span class="preview-url">https://example.com</span>
+        </div>
+        <div class="settings-note compact">Все параметры действуют только на это приложение и не меняют соседние плитки.</div>
+      </section>
 
       <div class="icon-field">
         <div class="icon-label-row">
@@ -244,7 +296,7 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=22"></script>
+<script src="/static/app.js?v=37"></script>
 
 </body>
 </html>
