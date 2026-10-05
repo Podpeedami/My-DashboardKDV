@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>My DashboardKDV</title>
-  <link rel="stylesheet" href="/static/style.css?v=23">
+  <link rel="stylesheet" href="/static/style.css?v=24">
 </head>
 <body>
 <div class="background"><div id="backgroundImage" class="background-image"></div></div>
@@ -65,17 +65,29 @@
 
       <label>Размер плитки
         <select id="tileSize">
-          <option value="small">Маленькая — компактная</option>
-          <option value="medium">Обычная — стандартная</option>
-          <option value="large">Большая — 2 колонки</option>
+          <option value="mini">Мини — 1×1</option>
+          <option value="small">Маленькая — компактная 1×1</option>
+          <option value="medium">Обычная — стандартная 1×1</option>
+          <option value="wide">Широкая — 2×1</option>
+          <option value="tall">Высокая — 1×2</option>
+          <option value="large">Большая — 2×2</option>
+          <option value="xl">XL — 3×2</option>
+          <option value="hero">Герой — 3×1</option>
         </select>
       </label>
 
       <div class="tile-size-preview" aria-live="polite">
-        <span class="tile-size-demo tile-size-demo-small">S</span>
-        <span class="tile-size-demo tile-size-demo-medium">M</span>
-        <span class="tile-size-demo tile-size-demo-large">L</span>
-        <span>Размер сохраняется отдельно для каждого приложения.</span>
+        <div class="tile-size-demo-grid">
+          <span class="tile-size-demo tile-size-demo-mini">XS</span>
+          <span class="tile-size-demo tile-size-demo-small">S</span>
+          <span class="tile-size-demo tile-size-demo-medium">M</span>
+          <span class="tile-size-demo tile-size-demo-wide">W</span>
+          <span class="tile-size-demo tile-size-demo-tall">T</span>
+          <span class="tile-size-demo tile-size-demo-large">L</span>
+          <span class="tile-size-demo tile-size-demo-xl">XL</span>
+          <span class="tile-size-demo tile-size-demo-hero">H</span>
+        </div>
+        <span>Мини • Маленькая • Обычная • Широкая • Высокая • Большая • XL • Герой. Размер сохраняется отдельно для каждого приложения.</span>
       </div>
 
       <div class="icon-field">

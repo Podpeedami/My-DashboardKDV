@@ -34,7 +34,7 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 ICONS_DIR.mkdir(parents=True, exist_ok=True)
 BACKGROUNDS_DIR.mkdir(parents=True, exist_ok=True)
 
-APP_TILE_SIZES = {'small', 'medium', 'large'}
+APP_TILE_SIZES = {'mini', 'small', 'medium', 'wide', 'tall', 'large', 'xl', 'hero'}
 MAX_ICON_BYTES = 5 * 1024 * 1024
 MAX_BACKGROUND_BYTES = 8 * 1024 * 1024
 ALLOWED_ICON_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".ico"}
@@ -54,7 +54,7 @@ ALLOWED_ICON_MIME = {
     "image/vnd.microsoft.icon": ".ico",
 }
 
-app = FastAPI(title="My DashboardKDV", version="2.0.0")
+app = FastAPI(title="My DashboardKDV", version="2.1.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/icons", StaticFiles(directory=ICONS_DIR), name="icons")
 app.mount("/backgrounds", StaticFiles(directory=BACKGROUNDS_DIR), name="backgrounds")
@@ -72,7 +72,7 @@ class AppItem(BaseModel):
     category_id: int
     icon: str = Field(default="🚀", max_length=500)
     favorite: bool = False
-    size: Literal['small', 'medium', 'large'] = 'medium'
+    size: Literal['mini', 'small', 'medium', 'wide', 'tall', 'large', 'xl', 'hero'] = 'medium'
     status_enabled: bool = True
 
 
@@ -90,7 +90,7 @@ class ExportApp(BaseModel):
     category_id: int
     icon: str = Field(default="🚀", max_length=500)
     favorite: bool = False
-    size: Literal['small', 'medium', 'large'] = 'medium'
+    size: Literal['mini', 'small', 'medium', 'wide', 'tall', 'large', 'xl', 'hero'] = 'medium'
     status_enabled: bool = True
     sort_order: int = 0
 

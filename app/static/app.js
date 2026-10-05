@@ -303,7 +303,7 @@ function renderApps(){
 function currentTitle(){if(selectedCategory==='all')return'Все приложения';if(selectedCategory==='favorites')return'Избранное';return categories.find(c=>c.id===selectedCategory)?.name||''}
 
 function appCard(a){
-  const size = ['small','medium','large'].includes(a.size) ? a.size : 'medium';
+  const size = ['mini','small','medium','wide','tall','large','xl','hero'].includes(a.size) ? a.size : 'medium';
   const dragAttrs = orderEditMode ? `draggable="true" ondragstart="dragStartApp(event,${a.id})" ondragover="dragOverApp(event)" ondragleave="dragLeaveApp(event)" ondrop="dropApp(event,${a.id})" ondragend="dragEndApp(event)"` : '';
   const dragHandle = orderEditMode ? '<span class="drag-handle" title="Перетащить">⠿</span>' : '';
   const moveActions = orderEditMode ? `<button title="Переместить вверх" onclick="moveAppByStep(event,${a.id},-1)">↑</button><button title="Переместить вниз" onclick="moveAppByStep(event,${a.id},1)">↓</button>` : '';
@@ -527,7 +527,7 @@ function openAppModal(a=null){
   document.getElementById('appIconUrl').value='';
   renderIconChoices('appIconChoices','icon',appIcons);
   document.getElementById('favorite').checked=!!a?.favorite;
-  document.getElementById('tileSize').value=['small','medium','large'].includes(a?.size)?a.size:'medium';
+  document.getElementById('tileSize').value=['mini','small','medium','wide','tall','large','xl','hero'].includes(a?.size)?a.size:'medium';
   fillCategorySelect();
   if(a)document.getElementById('categoryId').value=a.category_id;
   else if(typeof selectedCategory==='number')document.getElementById('categoryId').value=selectedCategory;
