@@ -1,0 +1,9 @@
+services:
+  dashboard:
+    build: .
+    container_name: my-dashboard
+    ports:
+      - "8080:8000"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My DashboardKDV</title>
+  <link rel="stylesheet" href="/static/style.css?v=13">
+</head>
+<body>
+<div class="background"><div id="backgroundImage" class="background-image"></div></div>
+
+<main class="container">
+  <header class="header">
+    <div>
+      <div class="brand">MY DASHBOARDKDV</div>
+      <h1>Все приложения в одном месте</h1>
+    </div>
+    <div class="header-actions"><button id="themeToggle" type="button">☀️ Светлая</button><button id="settingsButton" type="button">⚙ Настройки</button><button class="primary" onclick="openAppModal()">＋ Приложение</button></div>
+  </header>
+
+  <section class="toolbar">
+    <div class="search">
+      <span>⌕</span>
+      <input id="search" type="search" placeholder="Поиск приложений..." oninput="renderApps()">
+    </div>
+  </section>
+
+  <section id="embyPanel" class="emby-panel hidden" aria-live="polite"></section>
+
+  <nav id="categories" class="category-bar"></nav>
+
+  <section class="category-tools">
+    <button onclick="openCategoryModal()">＋ Создать категорию</button>
+    <button onclick="editSelectedCategory()">✎ Изменить категорию</button>
+    <button onclick="deleteSelectedCategory()">🗑 Удалить категорию</button>
+  </section>
+
+  <section id="dashboard"></section>
+
+</main>
+
+<div id="modal" class="modal hidden">
+  <div class="modal-card">
+    <button class="close" onclick="closeModal()">×</button>
+    <h2 id="modalTitle"></h2>
+    <form id="appForm" onsubmit="saveApp(event)">
+      <input type="hidden" id="appId">
+
+      <label>Название
+        <input id="name" required maxlength="100">
+      </label>
+
+      <label>URL
+        <input id="url" required maxlength="500" placeholder="http://localhost:8000">
+      </label>
+
+      <label>Описание
+        <input id="description" maxlength="300">
+      </label>
+
+      <label>Категория
+        <select id="categoryId" required></select>
+      </label>
+
+      <div class="icon-field">
+        <div class="icon-label-row">
+          <label for="icon">Иконка</label>
+          <span id="appIconPreview" class="icon-preview">🚀</span>
+          <button type="button" class="icon-clear" onclick="clearIcon('icon','appIconChoices')">Очистить</button>
+        </div>
+        <input id="icon" value="🚀" maxlength="500" placeholder="Emoji или локальная иконка" oninput="syncIconPicker('icon','appIconChoices')">
+        <div class="icon-source-row">
+          <label class="icon-source-button">🖼 Выбрать файл
+            <input type="file" accept=".png,.jpg,.jpeg,.webp,.gif,.ico,image/png,image/jpeg,image/webp,image/gif,image/x-icon" onchange="uploadIconFile('icon','appIconChoices','appIconSourceStatus',event)">
+          </label>
+          <button type="button" class="icon-source-button" onclick="findFavicon('icon','appIconChoices','url','appIconSourceStatus')">🌐 Найти favicon</button>
+        </div>
+        <div class="icon-url-row">
+          <input id="appIconUrl" placeholder="URL изображения: https://site.com/icon.png">
+          <button type="button" onclick="importIconFromUrl('icon','appIconChoices','appIconUrl','appIconSourceStatus')">Загрузить URL</button>
+        </div>
+        <div id="appIconSourceStatus" class="icon-status">Emoji / текстовый значок</div>
+        <div class="icon-hint">Можно выбрать emoji, загрузить картинку с компьютера, скачать её по URL или автоматически найти favicon сайта приложения.</div>
+        <div id="appIconChoices" class="icon-choices"></div>
+      </div>
+
+      <label class="check">
+        <input id="favorite" type="checkbox">
+        <span>⭐ Избранное</span>
+      </label>
+
+      <button class="primary full" type="submit">Сохранить</button>
+    </form>
+  </div>
+</div>
+
+<div id="settingsModal" class="modal hidden">
+  <div class="modal-card settings-card">
+    <button class="close" onclick="closeSettingsModal()">×</button>
+    <h2>Настройки панели</h2>
+    <p class="settings-note">Сохраняет приложения, категории, значки, ссылки, описания и избранное в отдельный JSON-файл. Файл можно перенести на другой компьютер.</p>
+    <div class="settings-actions">
+      <button class="primary" type="button" onclick="exportSettings()">💾 Экспортировать настройки</button>
+      <label class="file-button">📥 Импортировать настройки
+        <input id="settingsFile" type="file" accept="application/json,.json" onchange="importSettingsFile(event)">
+      </label>
+    </div>
+
+    <div class="settings-section">
+      <h3>🎨 Тема</h3>
+      <label>Оформление
+        <select id="themeSelect">
+          <option value="dark">🌙 Тёмная</option>
+          <option value="light">☀️ Светлая</option>
+        </select>
+      </label>
+      <div class="settings-note compact">Тема сохраняется в браузере и включается автоматически при следующем открытии Dashboard.</div>
+    </div>
+
+    <div class="settings-section">
+      <h3>🖼 Фоновое изображение</h3>
+      <div id="backgroundPreview" class="background-preview"><span>Фон не установлен</span></div>
+      <div class="background-source-row">
+        <label class="file-button">🖼 Выбрать файл
+          <input id="backgroundFile" type="file" accept=".png,.jpg,.jpeg,.webp,.gif,image/png,image/jpeg,image/webp,image/gif" onchange="uploadBackgroundFile(event)">
+        </label>
+        <button type="button" onclick="removeBackgroundImage()">🗑 Удалить фон</button>
+      </div>
+      <div class="background-url-row">
+        <input id="backgroundUrl" maxlength="2048" placeholder="URL изображения: https://site.com/background.jpg">
+        <button type="button" onclick="importBackgroundFromUrl()">🌐 Загрузить URL</button>
+      </div>
+      <label>Затемнение фона <span id="backgroundOpacityValue">35%</span>
+        <input id="backgroundOpacity" class="range-input" type="range" min="0" max="100" value="35" oninput="previewBackgroundOpacity(this.value)">
+      </label>
+      <button class="primary full" type="button" onclick="saveBackgroundSettings()">💾 Сохранить фон</button>
+      <div class="settings-note compact">Изображение сохраняется локально в Dashboard. При экспорте настроек фон включается в JSON-файл.</div>
+    </div>
+
+    <div class="settings-section">
+      <h3>📺 Emby</h3>
+      <label>Название
+        <input id="embyName" maxlength="100" placeholder="Emby">
+      </label>
+      <label>URL сервера
+        <input id="embyUrl" maxlength="500" placeholder="http://192.168.1.100:8096">
+      </label>
+      <label>API ключ
+        <input id="embyApiKey" type="password" maxlength="500" placeholder="X-Emby-Token">
+      </label>
+      <label class="check">
+        <input id="embyEnabled" type="checkbox" checked>
+        <span>Показывать статус Emby на панели</span>
+      </label>
+      <div id="embyKeyHint" class="settings-note compact">API ключ нужен для получения статуса сервера.</div>
+      <button class="primary full" type="button" onclick="saveEmbyConfig()">💾 Сохранить настройки Emby</button>
+    </div>
+
+    <div class="settings-warning">⚠ Импорт заменит текущие приложения и категории данными из файла. API ключ Emby намеренно не экспортируется.</div>
+  </div>
+</div>
+
+<div id="categoryModal" class="modal hidden">
+  <div class="modal-card small">
+    <button class="close" onclick="closeCategoryModal()">×</button>
+    <h2 id="categoryModalTitle">Создать категорию</h2>
+
+    <form onsubmit="saveCategory(event)">
+      <input type="hidden" id="categoryEditId">
+
+      <label>Название
+        <input id="categoryName" required maxlength="100" placeholder="Например: Работа">
+      </label>
+
+      <div class="icon-field">
+        <div class="icon-label-row">
+          <label for="categoryIcon">Иконка</label>
+          <span id="categoryIconPreview" class="icon-preview">📁</span>
+          <button type="button" class="icon-clear" onclick="clearIcon('categoryIcon','categoryIconChoices')">Очистить</button>
+        </div>
+        <input id="categoryIcon" value="📁" maxlength="500" placeholder="Emoji или локальная иконка" oninput="syncIconPicker('categoryIcon','categoryIconChoices')">
+        <div class="icon-source-row">
+          <label class="icon-source-button">🖼 Выбрать файл
+            <input type="file" accept=".png,.jpg,.jpeg,.webp,.gif,.ico,image/png,image/jpeg,image/webp,image/gif,image/x-icon" onchange="uploadIconFile('categoryIcon','categoryIconChoices','categoryIconSourceStatus',event)">
+          </label>
+        </div>
+        <div class="icon-url-row">
+          <input id="categoryIconUrl" placeholder="URL изображения: https://site.com/icon.png">
+          <button type="button" onclick="importIconFromUrl('categoryIcon','categoryIconChoices','categoryIconUrl','categoryIconSourceStatus')">Загрузить URL</button>
+        </div>
+        <div id="categoryIconSourceStatus" class="icon-status">Emoji / текстовый значок</div>
+        <div class="icon-hint">Можно выбрать emoji, загрузить картинку с компьютера или скачать её по URL.</div>
+        <div id="categoryIconChoices" class="icon-choices"></div>
+      </div>
+
+      <button class="primary full" type="submit">Сохранить</button>
+    </form>
+  </div>
+</div>
+
+<script src="/static/app.js?v=13"></script>
+
+</body>
+</html>
