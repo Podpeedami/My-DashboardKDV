@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>My DashboardKDV</title>
-  <link rel="stylesheet" href="/static/style.css?v=37">
+  <link rel="stylesheet" href="/static/style.css?v=38">
 </head>
 <body>
 <div class="background"><div id="backgroundImage" class="background-image"></div></div>
@@ -127,6 +127,17 @@
           </label>
           <label>Размер названия <span id="tileTitleSizeValue">17 px</span>
             <input id="tileTitleSize" class="range-input" type="range" min="12" max="28" value="17" oninput="updateTileAppearancePreview()">
+          </label>
+        </div>
+        <div class="tile-style-colors">
+          <label>Цвет названия
+            <input id="tileTitleColor" type="color" value="#ffffff" oninput="updateTileAppearancePreview()">
+          </label>
+          <label>Цвет описания
+            <input id="tileDescriptionColor" type="color" value="#cbd5e1" oninput="updateTileAppearancePreview()">
+          </label>
+          <label>Цвет URL
+            <input id="tileUrlColor" type="color" value="#94a3b8" oninput="updateTileAppearancePreview()">
           </label>
         </div>
         <div class="tile-style-checks">
@@ -296,7 +307,7 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=37"></script>
+<script src="/static/app.js?v=38"></script>
 
 </body>
 </html>

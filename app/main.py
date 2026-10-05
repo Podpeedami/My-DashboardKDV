@@ -83,6 +83,9 @@ class AppItem(BaseModel):
     tile_blur: float = Field(default=6.0, ge=0.0, le=20.0)
     tile_icon_size: int = Field(default=48, ge=24, le=96)
     tile_title_size: int = Field(default=17, ge=12, le=28)
+    tile_title_color: str = Field(default='#ffffff', pattern=r'^#[0-9a-fA-F]{6}$')
+    tile_description_color: str = Field(default='#cbd5e1', pattern=r'^#[0-9a-fA-F]{6}$')
+    tile_url_color: str = Field(default='#94a3b8', pattern=r'^#[0-9a-fA-F]{6}$')
     tile_show_description: bool = True
     tile_show_url: bool = False
 
@@ -110,6 +113,9 @@ class ExportApp(BaseModel):
     tile_blur: float = Field(default=6.0, ge=0.0, le=20.0)
     tile_icon_size: int = Field(default=48, ge=24, le=96)
     tile_title_size: int = Field(default=17, ge=12, le=28)
+    tile_title_color: str = Field(default='#ffffff', pattern=r'^#[0-9a-fA-F]{6}$')
+    tile_description_color: str = Field(default='#cbd5e1', pattern=r'^#[0-9a-fA-F]{6}$')
+    tile_url_color: str = Field(default='#94a3b8', pattern=r'^#[0-9a-fA-F]{6}$')
     tile_show_description: bool = True
     tile_show_url: bool = False
     sort_order: int = 0
@@ -185,6 +191,9 @@ def init_db():
             "ALTER TABLE apps ADD COLUMN tile_blur REAL NOT NULL DEFAULT 6.0",
             "ALTER TABLE apps ADD COLUMN tile_icon_size INTEGER NOT NULL DEFAULT 48",
             "ALTER TABLE apps ADD COLUMN tile_title_size INTEGER NOT NULL DEFAULT 17",
+            "ALTER TABLE apps ADD COLUMN tile_title_color TEXT NOT NULL DEFAULT '#ffffff'",
+            "ALTER TABLE apps ADD COLUMN tile_description_color TEXT NOT NULL DEFAULT '#cbd5e1'",
+            "ALTER TABLE apps ADD COLUMN tile_url_color TEXT NOT NULL DEFAULT '#94a3b8'",
             "ALTER TABLE apps ADD COLUMN tile_show_description INTEGER NOT NULL DEFAULT 1",
             "ALTER TABLE apps ADD COLUMN tile_show_url INTEGER NOT NULL DEFAULT 0",
         ]:
@@ -204,6 +213,8 @@ def init_db():
         conn.execute("UPDATE apps SET tile_blur=6.0 WHERE tile_blur IS NULL OR tile_blur < 0 OR tile_blur > 20")
         conn.execute("UPDATE apps SET tile_icon_size=48 WHERE tile_icon_size IS NULL OR tile_icon_size < 24 OR tile_icon_size > 96")
         conn.execute("UPDATE apps SET tile_title_size=17 WHERE tile_title_size IS NULL OR tile_title_size < 12 OR tile_title_size > 28")
+        for col, default in (("tile_title_color", "#ffffff"), ("tile_description_color", "#cbd5e1"), ("tile_url_color", "#94a3b8")):
+            conn.execute(f"UPDATE apps SET {col}=? WHERE {col} IS NULL OR {col} NOT GLOB '#??????'", (default,))
         if added_tile_icon_size:
             conn.execute("UPDATE apps SET tile_icon_size = CASE size WHEN 'mini' THEN 36 WHEN 'small' THEN 40 WHEN 'large' THEN 60 WHEN 'xl' THEN 72 WHEN 'hero' THEN 72 ELSE 48 END")
         if added_tile_title_size:
@@ -352,6 +363,7 @@ def list_apps():
         rows = conn.execute(
             """SELECT a.id,a.name,a.url,a.description,a.category_id,a.icon,a.favorite,a.size,a.status_enabled,a.sort_order,
             a.tile_bg_mode,a.tile_bg_value,a.tile_opacity,a.tile_blur,a.tile_icon_size,a.tile_title_size,
+            a.tile_title_color,a.tile_description_color,a.tile_url_color,
             a.tile_show_description,a.tile_show_url,
             c.name AS category_name,c.icon AS category_icon FROM apps a JOIN categories c ON c.id=a.category_id
             ORDER BY a.sort_order,a.id"""
@@ -382,11 +394,11 @@ def create_app(item: AppItem):
         next_order = conn.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM apps").fetchone()["next_order"]
         cur = conn.execute(
             """INSERT INTO apps(name,url,description,category_id,icon,favorite,size,status_enabled,sort_order,
-            tile_bg_mode,tile_bg_value,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_show_description,tile_show_url)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            tile_bg_mode,tile_bg_value,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_title_color,tile_description_color,tile_url_color,tile_show_description,tile_show_url)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (item.name.strip(), item.url.strip(), item.description.strip(), item.category_id, item.icon.strip() or "🚀", int(item.favorite),
              item.size, int(item.status_enabled), int(next_order), item.tile_bg_mode, item.tile_bg_value.strip(), item.tile_opacity,
-             item.tile_blur, item.tile_icon_size, item.tile_title_size, int(item.tile_show_description), int(item.tile_show_url)),
+             item.tile_blur, item.tile_icon_size, item.tile_title_size, item.tile_title_color, item.tile_description_color, item.tile_url_color, int(item.tile_show_description), int(item.tile_show_url)),
         )
         return {"id": cur.lastrowid, **item.model_dump()}
 
@@ -398,11 +410,11 @@ def update_app(app_id: int, item: AppItem):
             raise HTTPException(400, "Категория не найдена")
         cur = conn.execute(
             """UPDATE apps SET name=?,url=?,description=?,category_id=?,icon=?,favorite=?,size=?,status_enabled=?,
-            tile_bg_mode=?,tile_bg_value=?,tile_opacity=?,tile_blur=?,tile_icon_size=?,tile_title_size=?,tile_show_description=?,tile_show_url=?
+            tile_bg_mode=?,tile_bg_value=?,tile_opacity=?,tile_blur=?,tile_icon_size=?,tile_title_size=?,tile_title_color=?,tile_description_color=?,tile_url_color=?,tile_show_description=?,tile_show_url=?
             WHERE id=?""",
             (item.name.strip(), item.url.strip(), item.description.strip(), item.category_id, item.icon.strip() or "🚀", int(item.favorite),
              item.size, int(item.status_enabled), item.tile_bg_mode, item.tile_bg_value.strip(), item.tile_opacity, item.tile_blur,
-             item.tile_icon_size, item.tile_title_size, int(item.tile_show_description), int(item.tile_show_url), app_id),
+             item.tile_icon_size, item.tile_title_size, item.tile_title_color, item.tile_description_color, item.tile_url_color, int(item.tile_show_description), int(item.tile_show_url), app_id),
         )
         if not cur.rowcount:
             raise HTTPException(404, "Приложение не найдено")
@@ -414,7 +426,7 @@ def duplicate_app(app_id: int):
     with db() as conn:
         row = conn.execute(
             """SELECT name,url,description,category_id,icon,favorite,size,status_enabled,
-            tile_bg_mode,tile_bg_value,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_show_description,tile_show_url
+            tile_bg_mode,tile_bg_value,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_title_color,tile_description_color,tile_url_color,tile_show_description,tile_show_url
             FROM apps WHERE id=?""",
             (app_id,),
         ).fetchone()
@@ -423,10 +435,10 @@ def duplicate_app(app_id: int):
         next_order = conn.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM apps").fetchone()["next_order"]
         cur = conn.execute(
             """INSERT INTO apps(name,url,description,category_id,icon,favorite,size,status_enabled,sort_order,
-            tile_bg_mode,tile_bg_value,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_show_description,tile_show_url)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            tile_bg_mode,tile_bg_value,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_title_color,tile_description_color,tile_url_color,tile_show_description,tile_show_url)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (f"{row['name']} (копия)", row["url"], row["description"], row["category_id"], row["icon"], row["favorite"], row["size"], row["status_enabled"], int(next_order),
-             row["tile_bg_mode"], row["tile_bg_value"], row["tile_opacity"], row["tile_blur"], row["tile_icon_size"], row["tile_title_size"], row["tile_show_description"], row["tile_show_url"]),
+             row["tile_bg_mode"], row["tile_bg_value"], row["tile_opacity"], row["tile_blur"], row["tile_icon_size"], row["tile_title_size"], row["tile_title_color"], row["tile_description_color"], row["tile_url_color"], row["tile_show_description"], row["tile_show_url"]),
         )
     return {"id": cur.lastrowid}
 
@@ -1073,7 +1085,7 @@ def export_settings(theme: str = "dark"):
     with db() as conn:
         categories = [dict(r) for r in conn.execute("SELECT id,name,icon,sort_order FROM categories ORDER BY sort_order,id").fetchall()]
         apps = [dict(r) for r in conn.execute("""SELECT id,name,url,description,category_id,icon,favorite,size,status_enabled,sort_order,
-        tile_bg_mode,tile_bg_value,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_show_description,tile_show_url
+        tile_bg_mode,tile_bg_value,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_title_color,tile_description_color,tile_url_color,tile_show_description,tile_show_url
         FROM apps ORDER BY sort_order,id""").fetchall()]
     for item in apps:
         item["favorite"] = bool(item["favorite"])
@@ -1121,8 +1133,8 @@ def import_settings(settings: DashboardSettings):
                 sort_order = int(app_item.sort_order) if has_explicit_order else index
                 conn.execute(
                     """INSERT INTO apps(name,url,description,category_id,icon,favorite,size,status_enabled,sort_order,
-                    tile_bg_mode,tile_bg_value,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_show_description,tile_show_url)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    tile_bg_mode,tile_bg_value,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_title_color,tile_description_color,tile_url_color,tile_show_description,tile_show_url)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         app_item.name.strip(),
                         app_item.url.strip(),
@@ -1139,6 +1151,9 @@ def import_settings(settings: DashboardSettings):
                         app_item.tile_blur,
                         app_item.tile_icon_size,
                         app_item.tile_title_size,
+                        app_item.tile_title_color,
+                        app_item.tile_description_color,
+                        app_item.tile_url_color,
                         int(app_item.tile_show_description),
                         int(app_item.tile_show_url),
                     ),

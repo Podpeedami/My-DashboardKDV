@@ -332,6 +332,10 @@ function hexToRgb(value){
   return `${parseInt(hex.slice(0,2),16)},${parseInt(hex.slice(2,4),16)},${parseInt(hex.slice(4,6),16)}`;
 }
 
+function safeCssColor(value){
+  return /^#[0-9a-f]{6}$/i.test(String(value||'')) ? String(value) : '#ffffff';
+}
+
 function safeCssUrl(value){
   return String(value||'').replaceAll('\\','%5C').replaceAll('"','%22').replaceAll("'",'%27').replaceAll('\n','').replaceAll('\r','');
 }
@@ -341,6 +345,9 @@ function tileStyle(a){
   const blur=clampNumber(a.tile_blur,0,20,6);
   const iconSize=clampNumber(a.tile_icon_size,24,96,48);
   const titleSize=clampNumber(a.tile_title_size,12,28,17);
+  const titleColor=/^#[0-9a-f]{6}$/i.test(String(a.tile_title_color||''))?String(a.tile_title_color):'#ffffff';
+  const descriptionColor=/^#[0-9a-f]{6}$/i.test(String(a.tile_description_color||''))?String(a.tile_description_color):'#cbd5e1';
+  const urlColor=/^#[0-9a-f]{6}$/i.test(String(a.tile_url_color||''))?String(a.tile_url_color):'#94a3b8';
   const bgMode=['default','color','image'].includes(a.tile_bg_mode)?a.tile_bg_mode:'default';
   const bgValue=String(a.tile_bg_value||'').trim();
   const rgb=getComputedStyle(document.documentElement).getPropertyValue('--card-rgb').trim()||'25,29,39';
@@ -353,7 +360,7 @@ function tileStyle(a){
     imageVars=`--tile-bg-image:url("${safeCssUrl(bgValue)}");--tile-bg-opacity:${opacity};`;
     backgroundColor=`rgba(${rgb},1)`;
   }
-  return `style="background-color:${backgroundColor};backdrop-filter:blur(${blur}px);-webkit-backdrop-filter:blur(${blur}px);--tile-blur:${blur}px;--tile-icon-size:${iconSize}px;--tile-title-size:${titleSize}px;${imageVars}"`;
+  return `style="background-color:${backgroundColor};backdrop-filter:blur(${blur}px);-webkit-backdrop-filter:blur(${blur}px);--tile-blur:${blur}px;--tile-icon-size:${iconSize}px;--tile-title-size:${titleSize}px;--tile-title-color:${safeCssColor(titleColor)};--tile-description-color:${safeCssColor(descriptionColor)};--tile-url-color:${safeCssColor(urlColor)};${imageVars}"`;
 }
 
 function appCard(a){
@@ -422,6 +429,9 @@ async function savePanelLayout(){
         tile_blur:Number.isFinite(Number(a.tile_blur))?Number(a.tile_blur):6,
         tile_icon_size:Math.round(clampNumber(a.tile_icon_size,24,96,48)),
         tile_title_size:Math.round(clampNumber(a.tile_title_size,12,28,17)),
+        tile_title_color:/^#[0-9a-f]{6}$/i.test(String(a.tile_title_color||''))?a.tile_title_color:'#ffffff',
+        tile_description_color:/^#[0-9a-f]{6}$/i.test(String(a.tile_description_color||''))?a.tile_description_color:'#cbd5e1',
+        tile_url_color:/^#[0-9a-f]{6}$/i.test(String(a.tile_url_color||''))?a.tile_url_color:'#94a3b8',
         tile_show_description:a.tile_show_description!==false,
         tile_show_url:!!a.tile_show_url
       };
@@ -634,6 +644,9 @@ function getTileAppearanceFromForm(){
     tile_blur:clampNumber(document.getElementById('tileBlur')?.value,0,20,6),
     tile_icon_size:Math.round(clampNumber(document.getElementById('tileIconSize')?.value,24,96,48)),
     tile_title_size:Math.round(clampNumber(document.getElementById('tileTitleSize')?.value,12,28,17)),
+    tile_title_color:document.getElementById('tileTitleColor')?.value||'#ffffff',
+    tile_description_color:document.getElementById('tileDescriptionColor')?.value||'#cbd5e1',
+    tile_url_color:document.getElementById('tileUrlColor')?.value||'#94a3b8',
     tile_show_description:!!document.getElementById('tileShowDescription')?.checked,
     tile_show_url:!!document.getElementById('tileShowUrl')?.checked
   };
@@ -650,6 +663,10 @@ function setTileAppearanceForm(a={}){
   setRange('tileBlur',clampNumber(a.tile_blur,0,20,6));
   setRange('tileIconSize',Math.round(clampNumber(a.tile_icon_size,24,96,48)));
   setRange('tileTitleSize',Math.round(clampNumber(a.tile_title_size,12,28,17)));
+  const setColor=(id,value,def)=>{const el=document.getElementById(id);if(el)el.value=/^#[0-9a-f]{6}$/i.test(String(value||''))?String(value):def;};
+  setColor('tileTitleColor',a.tile_title_color,'#ffffff');
+  setColor('tileDescriptionColor',a.tile_description_color,'#cbd5e1');
+  setColor('tileUrlColor',a.tile_url_color,'#94a3b8');
   const desc=document.getElementById('tileShowDescription');if(desc)desc.checked=a.tile_show_description!==false;
   const showUrl=document.getElementById('tileShowUrl');if(showUrl)showUrl.checked=!!a.tile_show_url;
   updateTileAppearancePreview();
@@ -666,6 +683,9 @@ function applyLiveTileAppearancePreview(){
   const blur=appearance.tile_blur;
   const iconSize=appearance.tile_icon_size;
   const titleSize=appearance.tile_title_size;
+  const titleColor=appearance.tile_title_color||'#ffffff';
+  const descriptionColor=appearance.tile_description_color||'#cbd5e1';
+  const urlColor=appearance.tile_url_color||'#94a3b8';
   const mode=appearance.tile_bg_mode;
   const value=appearance.tile_bg_value;
   const rgb=getComputedStyle(document.documentElement).getPropertyValue('--card-rgb').trim()||'25,29,39';
@@ -673,6 +693,9 @@ function applyLiveTileAppearancePreview(){
   card.style.setProperty('--tile-blur',`${blur}px`);
   card.style.setProperty('--tile-icon-size',`${iconSize}px`);
   card.style.setProperty('--tile-title-size',`${titleSize}px`);
+  card.style.setProperty('--tile-title-color',safeCssColor(titleColor));
+  card.style.setProperty('--tile-description-color',safeCssColor(descriptionColor));
+  card.style.setProperty('--tile-url-color',safeCssColor(urlColor));
 
   if(mode==='image' && value){
     card.classList.add('tile-image-background');
@@ -709,6 +732,9 @@ function updateTileAppearancePreview(){
   const blur=clampNumber(document.getElementById('tileBlur')?.value,0,20,6);
   const iconSize=Math.round(clampNumber(document.getElementById('tileIconSize')?.value,24,96,48));
   const titleSize=Math.round(clampNumber(document.getElementById('tileTitleSize')?.value,12,28,17));
+  const titleColor=document.getElementById('tileTitleColor')?.value||'#ffffff';
+  const descriptionColor=document.getElementById('tileDescriptionColor')?.value||'#cbd5e1';
+  const urlColor=document.getElementById('tileUrlColor')?.value||'#94a3b8';
   const color=document.getElementById('tileBgColor')?.value||'#191d27';
   const image=document.getElementById('tileBgImage')?.value.trim()||'';
   const preview=document.getElementById('tileStylePreview');
@@ -718,6 +744,9 @@ function updateTileAppearancePreview(){
     preview.style.backdropFilter=`blur(${blur}px)`;
     preview.style.webkitBackdropFilter=`blur(${blur}px)`;
     preview.style.setProperty('--preview-tile-blur',`${blur}px`);
+    preview.style.setProperty('--preview-title-color',safeCssColor(titleColor));
+    preview.style.setProperty('--preview-description-color',safeCssColor(descriptionColor));
+    preview.style.setProperty('--preview-url-color',safeCssColor(urlColor));
     preview.style.setProperty('--preview-image-opacity',String(opacity));
     preview.style.setProperty('--preview-image', (mode==='image'&&image) ? `url("${safeCssUrl(image)}")` : 'none');
     preview.style.backgroundImage='none';
@@ -929,7 +958,7 @@ document.addEventListener('DOMContentLoaded',()=>{
   if(panelEditCancel)panelEditCancel.addEventListener('click',cancelPanelEditMode);
   const tileSize=document.getElementById('tileSize');
   if(tileSize)tileSize.addEventListener('change',updateTileSizePreview);
-  ['tileBgMode','tileBgColor','tileBgImage','tileOpacity','tileBlur','tileIconSize','tileTitleSize','tileShowDescription','tileShowUrl'].forEach(id=>{
+  ['tileBgMode','tileBgColor','tileBgImage','tileOpacity','tileBlur','tileIconSize','tileTitleSize','tileTitleColor','tileDescriptionColor','tileUrlColor','tileShowDescription','tileShowUrl'].forEach(id=>{
     const el=document.getElementById(id);
     if(el)el.addEventListener(el.type==='range'||el.type==='checkbox'||el.type==='color'?'input':'change',updateTileAppearancePreview);
   });
