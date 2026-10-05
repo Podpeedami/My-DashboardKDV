@@ -13,6 +13,9 @@ import urllib.error
 import uuid
 from html.parser import HTMLParser
 from typing import Literal
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
+from time import perf_counter
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
@@ -51,7 +54,7 @@ ALLOWED_ICON_MIME = {
     "image/vnd.microsoft.icon": ".ico",
 }
 
-app = FastAPI(title="My DashboardKDV", version="1.3.1")
+app = FastAPI(title="My DashboardKDV", version="2.0.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/icons", StaticFiles(directory=ICONS_DIR), name="icons")
 app.mount("/backgrounds", StaticFiles(directory=BACKGROUNDS_DIR), name="backgrounds")
@@ -70,6 +73,7 @@ class AppItem(BaseModel):
     icon: str = Field(default="🚀", max_length=500)
     favorite: bool = False
     size: Literal['small', 'medium', 'large'] = 'medium'
+    status_enabled: bool = True
 
 
 class ExportCategory(BaseModel):
@@ -87,6 +91,7 @@ class ExportApp(BaseModel):
     icon: str = Field(default="🚀", max_length=500)
     favorite: bool = False
     size: Literal['small', 'medium', 'large'] = 'medium'
+    status_enabled: bool = True
     sort_order: int = 0
 
 
@@ -133,14 +138,18 @@ def init_db():
             description TEXT NOT NULL DEFAULT '', category_id INTEGER NOT NULL,
             icon TEXT NOT NULL DEFAULT '🚀', favorite INTEGER NOT NULL DEFAULT 0,
             size TEXT NOT NULL DEFAULT 'medium',
+            status_enabled INTEGER NOT NULL DEFAULT 1,
             sort_order INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY(category_id) REFERENCES categories(id) ON UPDATE CASCADE ON DELETE RESTRICT)"""
         )
         app_columns = {row['name'] for row in conn.execute("PRAGMA table_info(apps)").fetchall()}
         if 'size' not in app_columns:
             conn.execute("ALTER TABLE apps ADD COLUMN size TEXT NOT NULL DEFAULT 'medium'")
+        if 'status_enabled' not in app_columns:
+            conn.execute("ALTER TABLE apps ADD COLUMN status_enabled INTEGER NOT NULL DEFAULT 1")
         if 'sort_order' not in app_columns:
             conn.execute("ALTER TABLE apps ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+        conn.execute("UPDATE apps SET status_enabled=1 WHERE status_enabled IS NULL")
         conn.execute("UPDATE apps SET size='medium' WHERE size NOT IN ('small','medium','large') OR size IS NULL")
         if conn.execute("SELECT COUNT(*) FROM apps WHERE sort_order != 0").fetchone()[0] == 0:
             conn.execute("UPDATE apps SET sort_order = id - 1")
@@ -168,12 +177,16 @@ def init_db():
             card_opacity REAL NOT NULL DEFAULT 0.90,
             card_blur REAL NOT NULL DEFAULT 6.0,
             background_blur REAL NOT NULL DEFAULT 2.0,
-            background_dim REAL NOT NULL DEFAULT 0.55
+            background_dim REAL NOT NULL DEFAULT 0.55,
+            status_checks_enabled INTEGER NOT NULL DEFAULT 1
             )"""
         )
+        appearance_columns = {row['name'] for row in conn.execute("PRAGMA table_info(appearance_settings)").fetchall()}
+        if 'status_checks_enabled' not in appearance_columns:
+            conn.execute("ALTER TABLE appearance_settings ADD COLUMN status_checks_enabled INTEGER NOT NULL DEFAULT 1")
         if conn.execute("SELECT 1 FROM appearance_settings WHERE id=1").fetchone() is None:
             conn.execute(
-                "INSERT INTO appearance_settings(id,card_opacity,card_blur,background_blur,background_dim) VALUES(1,0.90,6.0,2.0,0.55)"
+                "INSERT INTO appearance_settings(id,card_opacity,card_blur,background_blur,background_dim,status_checks_enabled) VALUES(1,0.90,6.0,2.0,0.55,1)"
             )
         conn.execute("UPDATE background_settings SET opacity=1 WHERE id=1")
         background_row = conn.execute("SELECT id FROM background_settings WHERE id=1").fetchone()
@@ -194,11 +207,11 @@ def init_db():
             cat = {r["name"]: r["id"] for r in conn.execute("SELECT id,name FROM categories")}
             conn.executemany(
                 """INSERT INTO apps
-                (name,url,description,category_id,icon,favorite,size,sort_order) VALUES (?,?,?,?,?,?,?,?)""",
+                (name,url,description,category_id,icon,favorite,size,status_enabled,sort_order) VALUES (?,?,?,?,?,?,?,?,?)""",
                 [
-                    ("Video Converter", "http://localhost:8000", "Перекодировка видео", cat["Мои приложения"], "🎬", 1, "medium", 0),
-                    ("GitHub", "https://github.com/", "Репозитории и код", cat["Инструменты"], "💻", 1, "medium", 1),
-                    ("Docker", "https://www.docker.com/", "Контейнеры и образы", cat["Docker"], "🐳", 1, "medium", 2),
+                    ("Video Converter", "http://localhost:8000", "Перекодировка видео", cat["Мои приложения"], "🎬", 1, "medium", 1, 0),
+                    ("GitHub", "https://github.com/", "Репозитории и код", cat["Инструменты"], "💻", 1, "medium", 1, 1),
+                    ("Docker", "https://www.docker.com/", "Контейнеры и образы", cat["Docker"], "🐳", 1, "medium", 1, 2),
                 ],
             )
 
@@ -264,7 +277,7 @@ def delete_category(category_id: int):
 def list_apps():
     with db() as conn:
         rows = conn.execute(
-            """SELECT a.id,a.name,a.url,a.description,a.category_id,a.icon,a.favorite,a.size,a.sort_order,
+            """SELECT a.id,a.name,a.url,a.description,a.category_id,a.icon,a.favorite,a.size,a.status_enabled,a.sort_order,
             c.name AS category_name,c.icon AS category_icon FROM apps a JOIN categories c ON c.id=a.category_id
             ORDER BY a.sort_order,a.id"""
         ).fetchall()
@@ -293,8 +306,8 @@ def create_app(item: AppItem):
             raise HTTPException(400, "Категория не найдена")
         next_order = conn.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM apps").fetchone()["next_order"]
         cur = conn.execute(
-            "INSERT INTO apps(name,url,description,category_id,icon,favorite,size,sort_order) VALUES (?,?,?,?,?,?,?,?)",
-            (item.name.strip(), item.url.strip(), item.description.strip(), item.category_id, item.icon.strip() or "🚀", int(item.favorite), item.size, int(next_order)),
+            "INSERT INTO apps(name,url,description,category_id,icon,favorite,size,status_enabled,sort_order) VALUES (?,?,?,?,?,?,?,?,?)",
+            (item.name.strip(), item.url.strip(), item.description.strip(), item.category_id, item.icon.strip() or "🚀", int(item.favorite), item.size, int(item.status_enabled), int(next_order)),
         )
         return {"id": cur.lastrowid, **item.model_dump()}
 
@@ -305,8 +318,8 @@ def update_app(app_id: int, item: AppItem):
         if not conn.execute("SELECT id FROM categories WHERE id=?", (item.category_id,)).fetchone():
             raise HTTPException(400, "Категория не найдена")
         cur = conn.execute(
-            "UPDATE apps SET name=?,url=?,description=?,category_id=?,icon=?,favorite=?,size=? WHERE id=?",
-            (item.name.strip(), item.url.strip(), item.description.strip(), item.category_id, item.icon.strip() or "🚀", int(item.favorite), item.size, app_id),
+            "UPDATE apps SET name=?,url=?,description=?,category_id=?,icon=?,favorite=?,size=?,status_enabled=? WHERE id=?",
+            (item.name.strip(), item.url.strip(), item.description.strip(), item.category_id, item.icon.strip() or "🚀", int(item.favorite), item.size, int(item.status_enabled), app_id),
         )
         if not cur.rowcount:
             raise HTTPException(404, "Приложение не найдено")
@@ -319,6 +332,83 @@ def delete_app(app_id: int):
         if not conn.execute("DELETE FROM apps WHERE id=?", (app_id,)).rowcount:
             raise HTTPException(404, "Приложение не найдено")
     return {"ok": True}
+
+
+# ---------------- Application status ----------------
+def _status_is_allowed_host(hostname: str) -> bool:
+    host = (hostname or "").strip().lower().rstrip(".")
+    if not host or host in {"localhost", "localhost.localdomain"}:
+        return False
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+        addresses = {item[4][0] for item in infos}
+        for raw in addresses:
+            ip = ipaddress.ip_address(raw)
+            if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
+                return False
+            # Block cloud metadata and other special link-local ranges, while allowing normal LAN services.
+            if str(ip) in {"169.254.169.254", "100.100.100.200"}:
+                return False
+        return bool(addresses)
+    except (socket.gaierror, ValueError):
+        return False
+
+
+def _check_app_status(app_item: dict) -> dict:
+    app_id = int(app_item["id"])
+    url = str(app_item.get("url") or "").strip()
+    if not app_item.get("status_enabled", 1):
+        return {"id": app_id, "state": "disabled", "online": None, "code": None, "latency_ms": None, "checked_at": None, "message": "Проверка выключена"}
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return {"id": app_id, "state": "unsupported", "online": None, "code": None, "latency_ms": None, "checked_at": None, "message": "Только HTTP/HTTPS"}
+    if not _status_is_allowed_host(parsed.hostname):
+        return {"id": app_id, "state": "unsupported", "online": None, "code": None, "latency_ms": None, "checked_at": None, "message": "Локальный/служебный адрес не проверяется"}
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "My-DashboardKDV/2.0",
+            "Accept": "text/html,application/json,*/*;q=0.8",
+            "Range": "bytes=0-0",
+        },
+        method="GET",
+    )
+    started = perf_counter()
+    checked_at = datetime.now(timezone.utc).isoformat()
+    try:
+        with urllib.request.urlopen(req, timeout=4, allow_redirects=True) as resp:
+            resp.read(1)
+            elapsed = round((perf_counter() - started) * 1000)
+            code = int(resp.status)
+            state = "online" if code < 500 else "degraded"
+            return {"id": app_id, "state": state, "online": True, "code": code, "latency_ms": elapsed, "checked_at": checked_at, "message": resp.reason or "OK"}
+    except urllib.error.HTTPError as exc:
+        elapsed = round((perf_counter() - started) * 1000)
+        code = int(exc.code)
+        state = "online" if code < 500 else "degraded"
+        return {"id": app_id, "state": state, "online": True, "code": code, "latency_ms": elapsed, "checked_at": checked_at, "message": str(exc.reason or "HTTP error")}
+    except (urllib.error.URLError, TimeoutError, socket.timeout, OSError) as exc:
+        elapsed = round((perf_counter() - started) * 1000)
+        return {"id": app_id, "state": "offline", "online": False, "code": None, "latency_ms": elapsed, "checked_at": checked_at, "message": str(exc.reason if isinstance(exc, urllib.error.URLError) and getattr(exc, "reason", None) else exc)[:180]}
+    except Exception as exc:
+        elapsed = round((perf_counter() - started) * 1000)
+        return {"id": app_id, "state": "offline", "online": False, "code": None, "latency_ms": elapsed, "checked_at": checked_at, "message": str(exc)[:180]}
+
+
+@app.get("/api/apps/status")
+def app_statuses():
+    with db() as conn:
+        appearance = conn.execute("SELECT status_checks_enabled FROM appearance_settings WHERE id=1").fetchone()
+        if appearance is not None and not bool(appearance["status_checks_enabled"]):
+            rows = conn.execute("SELECT id FROM apps ORDER BY sort_order,id").fetchall()
+            return [{"id": int(row["id"]), "state": "disabled_global", "online": None, "code": None, "latency_ms": None, "checked_at": None, "message": "Проверка статусов отключена в настройках панели"} for row in rows]
+        rows = conn.execute("SELECT id,url,status_enabled FROM apps ORDER BY sort_order,id").fetchall()
+    result = []
+    with ThreadPoolExecutor(max_workers=min(8, max(1, len(rows)))) as pool:
+        futures = [pool.submit(_check_app_status, dict(row)) for row in rows]
+        for future in as_completed(futures):
+            result.append(future.result())
+    return sorted(result, key=lambda item: item["id"])
 
 
 def _safe_extension(filename: str, content_type: str | None) -> str:
@@ -371,15 +461,16 @@ def _save_background_bytes(data: bytes, ext: str) -> str:
 def _appearance_settings() -> dict:
     with db() as conn:
         row = conn.execute(
-            "SELECT card_opacity,card_blur,background_blur,background_dim FROM appearance_settings WHERE id=1"
+            "SELECT card_opacity,card_blur,background_blur,background_dim,status_checks_enabled FROM appearance_settings WHERE id=1"
         ).fetchone()
     if not row:
-        return {"card_opacity": 0.90, "card_blur": 6.0, "background_blur": 2.0, "background_dim": 0.55}
+        return {"card_opacity": 0.90, "card_blur": 6.0, "background_blur": 2.0, "background_dim": 0.55, "status_checks_enabled": True}
     return {
         "card_opacity": max(0.45, min(1.0, float(row["card_opacity"] or 0.90))),
         "card_blur": max(0.0, min(20.0, float(row["card_blur"] or 6.0))),
         "background_blur": max(0.0, min(12.0, float(row["background_blur"] or 2.0))),
         "background_dim": max(0.0, min(0.85, float(row["background_dim"] or 0.55))),
+        "status_checks_enabled": bool(row["status_checks_enabled"]),
     }
 
 
@@ -395,6 +486,7 @@ def update_appearance(payload: dict):
         card_blur = float(payload.get("card_blur", 6.0))
         background_blur = float(payload.get("background_blur", 2.0))
         background_dim = float(payload.get("background_dim", 0.55))
+        status_checks_enabled = bool(payload.get("status_checks_enabled", True))
     except (TypeError, ValueError):
         raise HTTPException(400, "Некорректные значения внешнего вида")
     if not 0.45 <= card_opacity <= 1.0:
@@ -407,9 +499,9 @@ def update_appearance(payload: dict):
         raise HTTPException(400, "Затемнение фона должно быть от 0 до 85%")
     with db() as conn:
         conn.execute(
-            """INSERT INTO appearance_settings(id,card_opacity,card_blur,background_blur,background_dim) VALUES(1,?,?,?,?)
-            ON CONFLICT(id) DO UPDATE SET card_opacity=excluded.card_opacity,card_blur=excluded.card_blur,background_blur=excluded.background_blur,background_dim=excluded.background_dim""",
-            (card_opacity, card_blur, background_blur, background_dim),
+            """INSERT INTO appearance_settings(id,card_opacity,card_blur,background_blur,background_dim,status_checks_enabled) VALUES(1,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET card_opacity=excluded.card_opacity,card_blur=excluded.card_blur,background_blur=excluded.background_blur,background_dim=excluded.background_dim,status_checks_enabled=excluded.status_checks_enabled""",
+            (card_opacity, card_blur, background_blur, background_dim, int(status_checks_enabled)),
         )
     return _appearance_settings()
 
@@ -750,13 +842,17 @@ def emby_status():
         return {"configured": False, "enabled": bool(row["enabled"]) if row else True}
     api_key = row["api_key"]
     if not api_key:
-        return {"configured": True, "enabled": True, "online": False, "error": "Не указан API ключ Emby"}
+        return {"configured": True, "enabled": True, "online": False, "name": row["name"], "error": "Не указан API ключ Emby"}
+    started = perf_counter()
+    checked_at = datetime.now(timezone.utc).isoformat()
     try:
         _, info = _emby_request(row["url"], api_key, "/System/Info")
         _, sessions = _emby_request(row["url"], api_key, "/Sessions")
         sessions = sessions if isinstance(sessions, list) else []
         playing = [s for s in sessions if s.get("NowPlayingItem")]
         transcode_count = sum(1 for s in playing if _emby_transcoding_active(s))
+        users = len({s.get("UserName") for s in sessions if s.get("UserName")})
+        latency_ms = round((perf_counter() - started) * 1000)
         return {
             "configured": True,
             "enabled": True,
@@ -768,15 +864,50 @@ def emby_status():
             "sessions": len(sessions),
             "playing": len(playing),
             "transcoding": transcode_count,
+            "users": users,
+            "latency_ms": latency_ms,
+            "checked_at": checked_at,
             "players": [_emby_status_from_session(s) for s in playing[:12]],
         }
     except Exception as exc:
+        latency_ms = round((perf_counter() - started) * 1000)
         return {
             "configured": True,
             "enabled": True,
             "online": False,
             "name": row["name"],
+            "latency_ms": latency_ms,
+            "checked_at": checked_at,
             "error": str(exc)[:300],
+        }
+
+
+@app.post("/api/emby/test")
+def test_emby_connection(payload: dict):
+    url = _normalise_emby_url(str(payload.get("url", "")).strip())
+    api_key = str(payload.get("api_key", "")).strip()
+    if not url:
+        raise HTTPException(400, "Укажите URL Emby")
+    if not api_key:
+        with db() as conn:
+            row = conn.execute("SELECT api_key FROM emby_settings WHERE id=1").fetchone()
+        api_key = row["api_key"] if row else ""
+    if not api_key:
+        raise HTTPException(400, "Укажите API ключ Emby")
+    started = perf_counter()
+    try:
+        _, info = _emby_request(url, api_key, "/System/Info")
+        return {
+            "online": True,
+            "server_name": info.get("ServerName") or "Emby",
+            "version": info.get("Version") or "—",
+            "latency_ms": round((perf_counter() - started) * 1000),
+        }
+    except Exception as exc:
+        return {
+            "online": False,
+            "error": str(exc)[:300],
+            "latency_ms": round((perf_counter() - started) * 1000),
         }
 
 
@@ -787,7 +918,7 @@ def export_settings(theme: str = "dark"):
 
     with db() as conn:
         categories = [dict(r) for r in conn.execute("SELECT id,name,icon FROM categories ORDER BY id").fetchall()]
-        apps = [dict(r) for r in conn.execute("SELECT id,name,url,description,category_id,icon,favorite,size,sort_order FROM apps ORDER BY sort_order,id").fetchall()]
+        apps = [dict(r) for r in conn.execute("SELECT id,name,url,description,category_id,icon,favorite,size,status_enabled,sort_order FROM apps ORDER BY sort_order,id").fetchall()]
     for item in apps:
         item["favorite"] = bool(item["favorite"])
 
@@ -800,7 +931,7 @@ def export_settings(theme: str = "dark"):
         background_export["data"] = "data:%s;base64,%s" % (mime, base64.b64encode(bg_file.read_bytes()).decode("ascii"))
 
     return {
-        "version": 4,
+        "version": 5,
         "app_name": "My DashboardKDV",
         "theme": "light" if theme == "light" else "dark",
         "exported_at": datetime.now(timezone.utc).isoformat(),
@@ -842,6 +973,7 @@ def import_settings(settings: DashboardSettings):
                         app_item.icon.strip() or "🚀",
                         int(app_item.favorite),
                         app_item.size if app_item.size in APP_TILE_SIZES else "medium",
+                        int(app_item.status_enabled),
                         sort_order,
                     ),
                 )
@@ -885,10 +1017,11 @@ def import_settings(settings: DashboardSettings):
                 card_blur = max(0.0, min(20.0, float(appearance.get("card_blur", 6.0))))
                 background_blur = max(0.0, min(12.0, float(appearance.get("background_blur", 2.0))))
                 background_dim = max(0.0, min(0.85, float(appearance.get("background_dim", 0.55))))
+                status_checks_enabled = bool(appearance.get("status_checks_enabled", True))
                 conn.execute(
-                    """INSERT INTO appearance_settings(id,card_opacity,card_blur,background_blur,background_dim) VALUES(1,?,?,?,?)
-                    ON CONFLICT(id) DO UPDATE SET card_opacity=excluded.card_opacity,card_blur=excluded.card_blur,background_blur=excluded.background_blur,background_dim=excluded.background_dim""",
-                    (card_opacity, card_blur, background_blur, background_dim),
+                    """INSERT INTO appearance_settings(id,card_opacity,card_blur,background_blur,background_dim,status_checks_enabled) VALUES(1,?,?,?,?,?)
+                    ON CONFLICT(id) DO UPDATE SET card_opacity=excluded.card_opacity,card_blur=excluded.card_blur,background_blur=excluded.background_blur,background_dim=excluded.background_dim,status_checks_enabled=excluded.status_checks_enabled""",
+                    (card_opacity, card_blur, background_blur, background_dim, int(status_checks_enabled)),
                 )
     except sqlite3.IntegrityError as exc:
         raise HTTPException(400, f"Не удалось импортировать настройки: {exc}")

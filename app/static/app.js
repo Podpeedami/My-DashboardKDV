@@ -191,15 +191,21 @@ function renderEmbyStatus(data){
     return;
   }
   panel.classList.remove('hidden');
+  const checked=data.checked_at ? new Date(data.checked_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '';
   if(!data.online){
-    panel.innerHTML = `<div class="emby-header"><div><div class="emby-title">📺 ${escapeHtml(data.name || 'Emby')}</div><div class="emby-subtitle">Статус сервера</div></div><button type="button" onclick="loadEmbyStatus()">↻ Обновить</button></div><div class="emby-offline"><span class="status-dot offline"></span><div><strong>Офлайн</strong><div>${escapeHtml(data.error || 'Нет соединения с Emby')}</div></div></div>`;
+    panel.innerHTML = `<div class="emby-header"><div><div class="emby-title"><span class="status-dot offline"></span> 📺 ${escapeHtml(data.name || 'Emby')}</div><div class="emby-subtitle">Сервер недоступен${checked?' · проверено '+checked:''}</div></div><button type="button" onclick="loadEmbyStatus()">↻ Обновить</button></div><div class="emby-offline"><div><strong>Офлайн</strong><div>${escapeHtml(data.error || 'Нет соединения с Emby')}</div></div></div>`;
     return;
   }
   const players = Array.isArray(data.players) ? data.players : [];
-  const playerHtml = players.length ? players.map(p=>`<div class="emby-player"><span class="status-dot online"></span><div class="emby-player-main"><strong>${escapeHtml(p.user)}</strong><span>${escapeHtml(p.title || 'Воспроизведение')}</span><small>${escapeHtml(p.device)}${p.transcoding?' · Транскодирование':''}${p.paused?' · Пауза':''}</small></div><span class="emby-percent">${Math.round(p.percent)}%</span></div>`).join('') : '<div class="emby-empty">Сейчас никто не смотрит</div>';
-  panel.innerHTML = `<div class="emby-header"><div><div class="emby-title"><span class="status-dot online"></span> ${escapeHtml(data.server_name || data.name || 'Emby')}</div><div class="emby-subtitle">Emby ${escapeHtml(data.version || '')}</div></div><button type="button" onclick="loadEmbyStatus()">↻ Обновить</button></div><div class="emby-stats"><div><strong>${data.sessions||0}</strong><span>сессий</span></div><div><strong>${data.playing||0}</strong><span>смотрят</span></div><div><strong>${data.transcoding||0}</strong><span>транскод.</span></div></div><div class="emby-players">${playerHtml}</div>`;
+  const playerHtml = players.length ? players.map(p=>{
+    const title=p.title||'Воспроизведение';
+    const series=p.series?` · ${escapeHtml(p.series)}`:'';
+    const method=p.play_method?` · ${escapeHtml(p.play_method)}`:'';
+    const progress=Math.max(0,Math.min(100,Number(p.percent)||0));
+    return `<div class="emby-player"><span class="status-dot online"></span><div class="emby-player-main"><strong>${escapeHtml(p.user)}</strong><span>${escapeHtml(title)}${series}</span><small>${escapeHtml(p.device)}${p.transcoding?' · Транскодирование':''}${p.paused?' · Пауза':''}${method}</small><div class="emby-progress"><i style="width:${progress}%"></i></div></div><span class="emby-percent">${Math.round(progress)}%</span></div>`;
+  }).join('') : '<div class="emby-empty">Сейчас никто не смотрит</div>';
+  panel.innerHTML = `<div class="emby-header"><div><div class="emby-title"><span class="status-dot online"></span> ${escapeHtml(data.server_name || data.name || 'Emby')}</div><div class="emby-subtitle">Emby ${escapeHtml(data.version || '')}${data.latency_ms!=null?' · '+data.latency_ms+' ms':''}${checked?' · '+checked:''}</div></div><button type="button" onclick="loadEmbyStatus()">↻ Обновить</button></div><div class="emby-stats"><div><strong>${data.sessions||0}</strong><span>сессий</span></div><div><strong>${data.playing||0}</strong><span>смотрят</span></div><div><strong>${data.transcoding||0}</strong><span>транскод.</span></div><div><strong>${data.users||0}</strong><span>пользователей</span></div></div><div class="emby-players">${playerHtml}</div>`;
 }
-
 async function loadEmbyStatus(){
   try{
     const r=await fetch('/api/emby/status',{cache:'no-store'});
@@ -210,11 +216,22 @@ async function loadEmbyStatus(){
   }
 }
 
+async function testEmbyConnection(){
+  const box=document.getElementById('embyTestResult');
+  if(box)box.textContent='Проверяем подключение...';
+  try{
+    const r=await fetch('/api/emby/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:document.getElementById('embyUrl')?.value.trim()||'',api_key:document.getElementById('embyApiKey')?.value.trim()||''})});
+    const data=await r.json();
+    if(!r.ok)throw new Error(data.detail||'Не удалось проверить подключение');
+    if(box)box.textContent=data.online?`✅ ${data.server_name||'Emby'} · ${data.version||''}${data.latency_ms!=null?' · '+data.latency_ms+' ms':''}`:`❌ ${data.error||'Emby недоступен'}`;
+  }catch(e){if(box)box.textContent=`❌ ${e.message}`}
+}
 function startEmbyPolling(){
   loadEmbyStatus();
   if(embyTimer)clearInterval(embyTimer);
   embyTimer=setInterval(loadEmbyStatus, 15000);
 }
+
 
 async function loadEmbyConfig(){
   try{
@@ -583,7 +600,7 @@ async function deleteApp(id){
   await loadData();
 }
 
-function openSettingsModal(){const modal=document.getElementById('settingsModal');if(modal)modal.classList.remove('hidden');applyTheme(currentTheme,false);loadEmbyConfig();loadBackgroundConfig()}
+function openSettingsModal(){const modal=document.getElementById('settingsModal');if(modal)modal.classList.remove('hidden');applyTheme(currentTheme,false);syncAppearanceControls();loadEmbyConfig();loadBackgroundConfig();loadAppearanceConfig()}
 function closeSettingsModal(){const modal=document.getElementById('settingsModal');if(modal)modal.classList.add('hidden');const file=document.getElementById('settingsFile');if(file)file.value=''}
 
 async function exportSettings(){
@@ -617,6 +634,7 @@ async function importSettingsFile(event){
     closeSettingsModal();
     await loadData();
     await loadBackgroundConfig();
+    await loadAppearanceConfig();
     alert(`Настройки импортированы: ${result.categories} категорий, ${result.apps} приложений.`);
   }catch(e){alert(`Не удалось импортировать настройки: ${e.message}`)}finally{event.target.value=''}
 }
