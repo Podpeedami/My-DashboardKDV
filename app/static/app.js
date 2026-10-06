@@ -1050,19 +1050,35 @@ function renderLocalServices(services){
     </div>`).join('');
 }
 
+function guessLocalDiscoveryNetwork(){
+  const field=document.getElementById('localServicesNetwork');
+  if(!field||field.value.trim())return;
+  const host=window.location.hostname;
+  const m=host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if(!m)return;
+  const nums=m.slice(1).map(Number);
+  if(nums.some((n)=>n<0||n>255))return;
+  if((nums[0]===10)||(nums[0]===192&&nums[1]===168)||(nums[0]===172&&nums[1]>=16&&nums[1]<=31))
+    field.value=`${nums[0]}.${nums[1]}.${nums[2]}.0/24`;
+}
+
 async function discoverLocalServices(){
   const box=document.getElementById('localServicesResults');
   const status=document.getElementById('localServicesStatus');
   const button=document.getElementById('discoverLocalServicesButton');
+  const network=(document.getElementById('localServicesNetwork')?.value||'').trim();
+  if(!network){guessLocalDiscoveryNetwork();}
+  const target=(document.getElementById('localServicesNetwork')?.value||'').trim();
+  if(!target){if(status)status.textContent='Укажите приватную IPv4-сеть, например 192.168.1.0/24.';return}
   if(button)button.disabled=true;
-  if(status)status.textContent='Ищем локальные веб-сервисы…';
-  if(box)box.innerHTML='<div class="local-services-empty">Сканирование стандартных веб-портов…</div>';
+  if(status)status.textContent=`Сканируем ${target}…`;
+  if(box)box.innerHTML='<div class="local-services-empty">Проверяем адреса и распространённые веб-порты…</div>';
   try{
-    const r=await fetch('/api/local-services/discover',{cache:'no-store'});
+    const r=await fetch('/api/local-services/discover?network='+encodeURIComponent(target),{cache:'no-store'});
     const data=await r.json();
     if(!r.ok)throw new Error(data.detail||'Не удалось выполнить поиск');
     renderLocalServices(data.services);
-    if(status)status.textContent=`Найдено: ${Number(data.count)||0}. Сканирование однократное и ничего не сохраняет автоматически.`;
+    if(status)status.textContent=`Найдено: ${Number(data.count)||0}. Проверено адресов: ${Number(data.hosts_scanned)||0}, портов: ${Number(data.ports_scanned)||0}. Время: ${Number(data.duration_ms)||0} мс.`;
   }catch(e){
     if(box)box.innerHTML='<div class="local-services-empty">Ошибка поиска локальных сервисов.</div>';
     if(status)status.textContent=e.message;
@@ -1086,7 +1102,7 @@ function addDiscoveredLocalService(index){
   });
 }
 
-function openSettingsModal(){const modal=document.getElementById('settingsModal');if(modal)modal.classList.remove('hidden');applyTheme(currentTheme,false);syncAppearanceControls();loadEmbyConfig();loadBackgroundConfig();loadAppearanceConfig()}
+function openSettingsModal(){const modal=document.getElementById('settingsModal');if(modal)modal.classList.remove('hidden');applyTheme(currentTheme,false);syncAppearanceControls();loadEmbyConfig();loadBackgroundConfig();loadAppearanceConfig();guessLocalDiscoveryNetwork()}
 function closeSettingsModal(){const modal=document.getElementById('settingsModal');if(modal)modal.classList.add('hidden');const file=document.getElementById('settingsFile');if(file)file.value=''}
 
 async function exportSettings(){

@@ -810,3 +810,6 @@ body.embedded-open { overflow:hidden; }
 .local-service-main div{display:flex;flex-direction:column;gap:2px;min-width:0}.local-service-main strong{font-size:13px}.local-service-main span,.local-service-main small{color:var(--muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.local-service-main small{font-size:12px}
 .local-service-item button{flex:0 0 auto}.local-services-empty{padding:10px 12px;border:1px dashed var(--line);border-radius:12px;color:var(--muted);font-size:12px;text-align:center}
 @media(max-width:620px){.local-service-item{align-items:stretch;flex-direction:column}.local-service-item button{width:100%}}
+
+.local-services-results{max-height:520px;overflow:auto}
+.local-services-results code{font-size:11px}

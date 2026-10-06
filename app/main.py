@@ -50,9 +50,11 @@ TILE_BACKGROUNDS_DIR.mkdir(parents=True, exist_ok=True)
 APP_TILE_SIZES = {'mini', 'small', 'medium', 'wide', 'tall', 'large', 'xl', 'hero'}
 
 
-# One-shot discovery of common local web services on the host running Dashboard.
+# One-shot discovery of common HTTP services across the local network.
 # This is intentionally a manual discovery feature, not continuous status monitoring.
 LOCAL_SERVICE_HOST = "host.docker.internal"
+LOCAL_DISCOVERY_MAX_HOSTS = 256
+LOCAL_DISCOVERY_DEFAULT_TIMEOUT = httpx.Timeout(1.5, connect=0.45)
 LOCAL_SERVICE_CANDIDATES = [
     (80, ("http",), "🌐", "Веб-сервис"),
     (443, ("https",), "🔒", "HTTPS веб-сервис"),
@@ -82,7 +84,7 @@ LOCAL_SERVICE_CANDIDATES = [
 
 LOCAL_SERVICE_SIGNATURES = (
     (("mstream", "file explorer", "now playing"), "mStream Music", "🎵", "Локальная музыкальная библиотека"),
-    (("grafana" ,), "Grafana", "📊", "Мониторинг и графики"),
+    (("grafana",), "Grafana", "📊", "Мониторинг и графики"),
     (("emby",), "Emby", "📺", "Домашний медиасервер"),
     (("jellyfin",), "Jellyfin", "📺", "Домашний медиасервер"),
     (("portainer",), "Portainer", "🐳", "Управление Docker"),
@@ -114,34 +116,49 @@ def _identify_local_service(port: int, title: str, body: str, fallback_name: str
     return fallback_name, fallback_icon, fallback_description
 
 
-async def _probe_local_service(client: httpx.AsyncClient, port: int, schemes: tuple[str, ...], icon: str, fallback_name: str):
-    for scheme in schemes:
-        url = f"{scheme}://{LOCAL_SERVICE_HOST}:{port}/"
-        try:
-            response = await client.get(
-                url,
-                headers={"User-Agent": "My DashboardKDV Local Service Discovery/2.9.0"},
-                follow_redirects=True,
-            )
-            content_type = response.headers.get("content-type", "")
-            body = response.text[:50000] if "text" in content_type.lower() or "html" in content_type.lower() else ""
-            title = _extract_page_title(body)
-            name, detected_icon, description = _identify_local_service(
-                port, title, body, fallback_name, icon, fallback_name
-            )
-            final_url = str(response.url).rstrip("/")
-            return {
-                "port": port,
-                "url": final_url,
-                "name": name,
-                "icon": detected_icon,
-                "description": description,
-                "title": title,
-                "status_code": response.status_code,
-            }
-        except (httpx.HTTPError, ValueError, UnicodeError):
-            continue
+async def _probe_network_service(client: httpx.AsyncClient, ip: str, port: int, schemes: tuple[str, ...], icon: str, fallback_name: str, semaphore: asyncio.Semaphore):
+    async with semaphore:
+        for scheme in schemes:
+            url = f"{scheme}://{ip}:{port}/"
+            try:
+                response = await client.get(
+                    url,
+                    headers={"User-Agent": "My DashboardKDV Local Network Discovery/2.9.1", "Accept": "text/html,application/json;q=0.9,*/*;q=0.1"},
+                    follow_redirects=False ,
+                )
+                content_type = response.headers.get("content-type", "")
+                body = response.text[:50000] if "text" in content_type.lower() or "html" in content_type.lower() or "json" in content_type.lower() else ""
+                title = _extract_page_title(body)
+                name, detected_icon, description = _identify_local_service(port, title, body, fallback_name, icon, fallback_name)
+                return {
+                    "ip": ip,
+                    "port": port,
+                    "url": url.rstrip("/"),
+                    "name": name,
+                    "icon": detected_icon,
+                    "description": description,
+                    "title": title,
+                    "status_code": response.status_code,
+                }
+            except (httpx.HTTPError, ValueError, UnicodeError):
+                continue
     return None
+
+
+def _normalise_discovery_network(network_value: str) -> ipaddress.IPv4Network:
+    value = (network_value or "").strip()
+    if not value:
+        raise ValueError("Укажите IPv4-сеть, например 192.168.1.0/24")
+    try:
+        network = ipaddress.ip_network(value, strict=False)
+    except ValueError as exc:
+        raise ValueError("Неверная IPv4-сеть. Пример: 192.168.1.0/24") from exc
+    if network.version != 4 or not network.is_private:
+        raise ValueError("Разрешено сканировать только приватные IPv4-сети (192.168.x.x, 10.x.x.x, 172.16-31.x.x)")
+    if network.num_addresses > LOCAL_DISCOVERY_MAX_HOSTS:
+        raise ValueError(f"Сеть слишком большая. Максимум {LOCAL_DISCOVERY_MAX_HOSTS} адресов; используйте, например, /24")
+    return network
+
 MAX_ICON_BYTES = 5 * 1024 * 1024
 MAX_BACKGROUND_BYTES = 8 * 1024 * 1024
 ALLOWED_ICON_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".ico"}
@@ -648,21 +665,40 @@ def reorder_categories(payload: ReorderCategories):
 
 
 @app.get("/api/local-services/discover")
-async def discover_local_services():
-    """Find common HTTP services listening on the Docker host.
+async def discover_local_services(network: str = ""):
+    """Find common HTTP services across a private IPv4 network.
 
-    The endpoint performs a one-shot scan of a small curated list of web ports.
-    It does not save anything and does not run periodically.
+    This is a manual one-shot discovery. It scans the requested private network
+    on a curated set of common web ports and does not save results automatically.
     """
-    async with httpx.AsyncClient(timeout=httpx.Timeout(1.8, connect=0.7), verify=False) as client:
+    try:
+        target_network = _normalise_discovery_network(network)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+    hosts = [str(ip) for ip in target_network.hosts()]
+    if not hosts:
+        return {"network": str(target_network), "services": [], "count": 0, "hosts_scanned": 0, "ports_scanned": len(LOCAL_SERVICE_CANDIDATES)}
+
+    semaphore = asyncio.Semaphore(180)
+    started = time.perf_counter()
+    async with httpx.AsyncClient(timeout=LOCAL_DISCOVERY_DEFAULT_TIMEOUT, verify=False) as client:
         tasks = [
-            _probe_local_service(client, port, schemes, icon, fallback_name)
+            _probe_network_service(client, ip, port, schemes, icon, fallback_name, semaphore)
+            for ip in hosts
             for port, schemes, icon, fallback_name in LOCAL_SERVICE_CANDIDATES
         ]
         results = await asyncio.gather(*tasks)
     services = [item for item in results if item]
-    services.sort(key=lambda item: (item["port"], item["name"].lower()))
-    return {"host": LOCAL_SERVICE_HOST, "services": services, "count": len(services)}
+    services.sort(key=lambda item: (ipaddress.ip_address(item["ip"]), item["port"], item["name"].lower()))
+    return {
+        "network": str(target_network),
+        "services": services,
+        "count": len(services),
+        "hosts_scanned": len(hosts),
+        "ports_scanned": len(LOCAL_SERVICE_CANDIDATES),
+        "duration_ms": round((time.perf_counter() - started) * 1000),
+    }
 
 
 @app.get("/api/apps")
