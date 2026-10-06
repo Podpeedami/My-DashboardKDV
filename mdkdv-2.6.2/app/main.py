@@ -8,8 +8,6 @@ import re
 import socket
 import sqlite3
 import urllib.parse
-import time
-import secrets
 import urllib.request
 import urllib.error
 import uuid
@@ -18,11 +16,9 @@ from typing import Literal
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from time import perf_counter
-from urllib.parse import urlsplit, urlunsplit
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Request
-from fastapi.responses import FileResponse, Response
-import httpx
+from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -33,11 +29,6 @@ ICONS_DIR = DATA_DIR / "icons"
 BACKGROUNDS_DIR = DATA_DIR / "backgrounds"
 TILE_BACKGROUNDS_DIR = DATA_DIR / "tile-backgrounds"
 STATIC_DIR = BASE_DIR / "static"
-
-# Embedded-app reverse proxy sessions. The iframe is served from the same
-# Dashboard origin so apps that rely on first-party cookies (notably mStream)
-# can complete authentication inside the embedded view. Sessions are in-memory
-# and expire automatically; the target URL is never persisted to SQLite.
 DEFAULT_BACKGROUND_SOURCE = STATIC_DIR / "assets" / "default-background.png"
 DEFAULT_BACKGROUND_NAME = "my-dashboardkdv-default.png"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -65,174 +56,11 @@ ALLOWED_ICON_MIME = {
     "image/vnd.microsoft.icon": ".ico",
 }
 
-app = FastAPI(title="My DashboardKDV", version="2.6.4")
+app = FastAPI(title="My DashboardKDV", version="2.6.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/icons", StaticFiles(directory=ICONS_DIR), name="icons")
 app.mount("/backgrounds", StaticFiles(directory=BACKGROUNDS_DIR), name="backgrounds")
 app.mount("/tile-backgrounds", StaticFiles(directory=TILE_BACKGROUNDS_DIR), name="tile-backgrounds")
-
-EMBEDDED_SESSION_TTL = 3600
-EMBEDDED_SESSION_PATTERN = re.compile(r"^/embedded/([A-Za-z0-9_-]{24,64})(?:/.*)?$")
-embedded_sessions: dict[str, dict[str, object]] = {}
-
-
-def _cleanup_embedded_sessions() -> None:
-    now = time.time()
-    for session_id, data in list(embedded_sessions.items()):
-        if float(data.get("expires_at", 0)) <= now:
-            embedded_sessions.pop(session_id, None)
-
-
-def _normalize_proxy_target(url: str) -> str:
-    value = (url or "").strip()
-    parts = urlsplit(value)
-    if parts.scheme not in {"http", "https"} or not parts.netloc:
-        raise HTTPException(400, "URL встроенного приложения должен начинаться с http:// или https://")
-
-    host = parts.hostname or ""
-    port = parts.port
-    if host in {"localhost", "127.0.0.1"}:
-        host = "host.docker.internal"
-        authority = host + (f":{port}" if port else "")
-        return urlunsplit((parts.scheme, authority, parts.path, parts.query, ""))
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, ""))
-
-
-def _embedded_session_from_request(request: Request) -> str | None:
-    _cleanup_embedded_sessions()
-    referer = request.headers.get("referer", "")
-    if not referer:
-        return None
-    try:
-        ref_path = urlsplit(referer).path
-    except ValueError:
-        return None
-    match = EMBEDDED_SESSION_PATTERN.match(ref_path)
-    if match and match.group(1) in embedded_sessions:
-        return match.group(1)
-    return None
-
-
-def _rewrite_location(location: str, session_id: str) -> str:
-    if not location:
-        return location
-    parts = urlsplit(location)
-    target = str(embedded_sessions.get(session_id, {}).get("target", ""))
-    target_parts = urlsplit(target) if target else None
-    if parts.scheme and parts.netloc and target_parts:
-        if parts.scheme == target_parts.scheme and parts.netloc == target_parts.netloc:
-            path = parts.path or "/"
-            return urlunsplit(("", "", f"/embedded/{session_id}{path}", parts.query, parts.fragment))
-        return location
-    path = parts.path or "/"
-    if not path.startswith("/"):
-        path = "/" + path
-    if path.startswith("/embedded/"):
-        return location
-    return urlunsplit(("", "", f"/embedded/{session_id}{path}", parts.query, parts.fragment))
-
-
-def _rewrite_set_cookie(cookie: str) -> str:
-    # Store upstream auth cookies on the Dashboard origin. mStream uses the
-    # x-access-token cookie for JWT authentication.
-    cookie = re.sub(r";\s*Domain=[^;]+", "", cookie, flags=re.I)
-    if not re.search(r";\s*Path=", cookie, flags=re.I):
-        cookie += "; Path=/"
-    return cookie
-
-
-def _rewrite_forwarded_headers(request: Request, target: str, session_id: str) -> dict[str, str]:
-    target_parts = urlsplit(target)
-    headers: dict[str, str] = {}
-    for name, value in request.headers.items():
-        lower = name.lower()
-        if lower in {"host", "content-length", "connection", "accept-encoding", "origin", "referer", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest"}:
-            continue
-        headers[name] = value
-    # Upstream should see its own origin rather than Dashboard's origin.
-    upstream_origin = f"{target_parts.scheme}://{target_parts.netloc}"
-    if request.headers.get("origin"):
-        headers["origin"] = upstream_origin
-    incoming_referer = request.headers.get("referer", "")
-    if incoming_referer:
-        ref_parts = urlsplit(incoming_referer)
-        if ref_parts.path.startswith("/embedded/"):
-            prefix = f"/embedded/{session_id}"
-            stripped = ref_parts.path[len(prefix):] if ref_parts.path.startswith(prefix) else "/"
-            headers["referer"] = urlunsplit((target_parts.scheme, target_parts.netloc, stripped or "/", ref_parts.query, ref_parts.fragment))
-        else:
-            headers["referer"] = incoming_referer
-    headers["x-forwarded-host"] = request.headers.get("host", "")
-    headers["x-forwarded-proto"] = request.url.scheme
-    return headers
-
-
-async def _proxy_embedded_request(request: Request, session_id: str, subpath: str = "") -> Response:
-    session = embedded_sessions.get(session_id)
-    if not session or float(session.get("expires_at", 0)) <= time.time():
-        embedded_sessions.pop(session_id, None)
-        raise HTTPException(404, "Сессия встроенного приложения истекла")
-
-    target = str(session["target"]).rstrip("/") + "/" + subpath.lstrip("/")
-    if request.url.query:
-        target += "?" + request.url.query
-
-    body = await request.body()
-    forwarded_headers = _rewrite_forwarded_headers(request, target, session_id)
-
-    timeout = httpx.Timeout(60.0, connect=10.0)
-    async with httpx.AsyncClient(follow_redirects=False, timeout=timeout) as client:
-        try:
-            upstream = await client.request(request.method, target, headers=forwarded_headers, content=body)
-        except httpx.HTTPError as exc:
-            raise HTTPException(502, f"Не удалось открыть встроенное приложение: {exc}") from exc
-
-    response = Response(content=upstream.content, status_code=upstream.status_code)
-    for name, value in upstream.headers.items():
-        lower = name.lower()
-        if lower in {"content-length", "transfer-encoding", "connection", "content-encoding", "set-cookie", "location"}:
-            continue
-        response.headers[name] = value
-    for cookie in upstream.headers.get_list("set-cookie"):
-        response.headers.append("set-cookie", _rewrite_set_cookie(cookie))
-    location = upstream.headers.get("location")
-    if location:
-        response.headers["location"] = _rewrite_location(location, session_id)
-    return response
-
-
-
-
-@app.middleware("http")
-async def embedded_proxy_middleware(request: Request, call_next):
-    session_id = _embedded_session_from_request(request)
-    path = request.url.path
-    if session_id and not path.startswith("/embedded/") and not path.startswith("/static/"):
-        return await _proxy_embedded_request(request, session_id, path.lstrip("/"))
-    return await call_next(request)
-
-
-@app.post("/api/embedded/session")
-async def create_embedded_session(request: Request):
-    payload = await request.json()
-    target = _normalize_proxy_target(str(payload.get("url", "")))
-    _cleanup_embedded_sessions()
-    session_id = secrets.token_urlsafe(24)
-    embedded_sessions[session_id] = {"target": target, "expires_at": time.time() + EMBEDDED_SESSION_TTL}
-    return {"id": session_id, "url": f"/embedded/{session_id}/"}
-
-
-@app.api_route("/embedded/{session_id}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
-@app.api_route("/embedded/{session_id}/", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
-async def embedded_entry(request: Request, session_id: str):
-    return await _proxy_embedded_request(request, session_id, "")
-
-
-@app.api_route("/embedded/{session_id}/{subpath:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
-async def embedded_prefixed_proxy(request: Request, session_id: str, subpath: str):
-    return await _proxy_embedded_request(request, session_id, subpath)
-
-
 
 
 class Category(BaseModel):

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>My DashboardKDV</title>
-  <link rel="stylesheet" href="/static/style.css?v=43">
+  <link rel="stylesheet" href="/static/style.css?v=40">
 </head>
 <body>
 <div class="background"><div id="backgroundImage" class="background-image"></div></div>
@@ -21,7 +21,7 @@
   <section class="toolbar">
     <div class="search">
       <span>⌕</span>
-      <div id="search" class="search-field" contenteditable="true" role="searchbox" aria-label="Поиск приложений" data-form-type="other" spellcheck="false"></div>
+      <input id="search" type="search" placeholder="Поиск приложений..." oninput="renderApps()">
     </div>
   </section>
 
@@ -339,7 +339,7 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=43"></script>
+<script src="/static/app.js?v=40"></script>
 
 </body>
 </html>

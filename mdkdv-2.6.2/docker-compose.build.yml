@@ -1,10 +1,11 @@
 services:
   dashboard:
-    image: ghcr.io/podpeedami/my-dashboardkdv:latest
-    container_name: my-dashboardkdv
+    build:
+      context: .
+    image: my-dashboardkdv:local
+    container_name: my-dashboardkdv-dev
     ports:
       - "8080:8000"
     volumes:
       - ./data:/app/data
     restart: unless-stopped
-    

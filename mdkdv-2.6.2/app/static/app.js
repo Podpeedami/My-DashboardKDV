@@ -301,7 +301,7 @@ function renderCategories(){
 function selectCategory(id){selectedCategory=id;renderCategories();renderApps()}
 
 function renderApps(){
-  const q=(document.getElementById('search')?.textContent||'').toLowerCase().trim();
+  const q=(document.getElementById('search')?.value||'').toLowerCase().trim();
   if(panelEditMode && q) cancelPanelEditMode();
   const filtered=apps.filter(a=>{
     const cat=selectedCategory==='all'||(selectedCategory==='favorites'&&a.favorite)||a.category_id===selectedCategory;
@@ -410,22 +410,10 @@ function openEmbeddedApp(a){
   if(!modal||!frame)return;
   title.textContent=a.name||'Приложение';
   external.href=a.url;
-  loading.classList.add('hidden');
+  loading.classList.remove('hidden');
   modal.classList.remove('hidden');
   document.body.classList.add('embedded-open');
-  frame.dataset.originalUrl=a.url;
-  frame.src='about:blank';
-  (async()=>{
-    try{
-      const r=await fetch('/api/embedded/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:a.url})});
-      const data=await r.json().catch(()=>({}));
-      if(!r.ok)throw new Error(data.detail||'Не удалось открыть встроенное приложение');
-      frame.src=data.url;
-    }catch(e){
-      loading.classList.add('hidden');
-      alert(e.message);
-    }
-  })();
+  frame.src=a.url;
   // Some embedded apps (including login flows) do not reliably trigger the
   // expected load transition for the loading overlay. Never leave the overlay
   // stuck on top of a usable application.
@@ -446,14 +434,14 @@ function reloadEmbeddedApp(){
   const frame=document.getElementById('embeddedAppFrame');
   const loading=document.getElementById('embeddedAppLoading');
   if(!frame)return;
-  const source=frame.dataset.originalUrl||'';
-  loading?.classList.add('hidden');
+  loading?.classList.remove('hidden');
+  const src=frame.src;
   frame.src='about:blank';
-  if(!source)return;
-  fetch('/api/embedded/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:source})})
-    .then(r=>r.json().then(data=>({ok:r.ok,data})))
-    .then(({ok,data})=>{if(!ok)throw new Error(data.detail||'Не удалось обновить встроенное приложение');frame.src=data.url;window.clearTimeout(window.__embeddedLoadTimeout);window.__embeddedLoadTimeout=window.setTimeout(embeddedFrameLoaded,1500);})
-    .catch(e=>{loading?.classList.add('hidden');alert(e.message)});
+  requestAnimationFrame(()=>{
+    frame.src=src;
+    window.clearTimeout(window.__embeddedLoadTimeout);
+    window.__embeddedLoadTimeout=window.setTimeout(embeddedFrameLoaded, 1500);
+  });
 }
 
 function embeddedFrameLoaded(){
@@ -1018,12 +1006,6 @@ function escapeHtml(v){return String(v??'').replaceAll('&','&amp;').replaceAll('
 function escapeAttr(v){return escapeHtml(v)}
 
 document.addEventListener('DOMContentLoaded',()=>{
-  const searchField=document.getElementById('search');
-  if(searchField){
-    searchField.textContent='';
-    searchField.addEventListener('input',renderApps);
-    searchField.addEventListener('paste',()=>setTimeout(renderApps,0));
-  }
   applyTheme(currentTheme,false);
   const settingsButton=document.getElementById('settingsButton');
   if(settingsButton)settingsButton.addEventListener('click',openSettingsModal);
@@ -1048,13 +1030,6 @@ document.addEventListener('DOMContentLoaded',()=>{
   loadBackgroundConfig();
   loadAppearanceConfig();
   startEmbyPolling();
-});
-
-// The Dashboard search is a contenteditable element rather than a form input.
-// This prevents browser/password-manager credential autofill from treating it as a username field.
-window.addEventListener('pageshow',()=>{
-  const searchField=document.getElementById('search');
-  if(searchField)searchField.textContent='';
 });
 
 
