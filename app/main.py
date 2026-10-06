@@ -15,7 +15,7 @@ import urllib.request
 import urllib.error
 import uuid
 from html.parser import HTMLParser
-from typing import Literal
+from typing import Literal, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 import base64
@@ -178,7 +178,7 @@ ALLOWED_ICON_MIME = {
     "image/vnd.microsoft.icon": ".ico",
 }
 
-app = FastAPI(title="My DashboardKDV", version="2.9.0")
+app = FastAPI(title="My DashboardKDV", version="2.11.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/icons", StaticFiles(directory=ICONS_DIR), name="icons")
 app.mount("/backgrounds", StaticFiles(directory=BACKGROUNDS_DIR), name="backgrounds")
@@ -358,6 +358,7 @@ class AppItem(BaseModel):
     url: str = Field(min_length=1, max_length=500)
     description: str = Field(default="", max_length=300)
     category_id: int
+    group_id: Optional[int] = None
     icon: str = Field(default="🚀", max_length=500)
     favorite: bool = False
     open_mode: Literal['external', 'embedded'] = 'external'
@@ -384,12 +385,21 @@ class ExportCategory(BaseModel):
     sort_order: int = 0
 
 
+class ExportGroup(BaseModel):
+    id: int
+    category_id: int
+    name: str = Field(min_length=1, max_length=100)
+    icon: str = Field(default="📂", max_length=500)
+    sort_order: int = 0
+
+
 class ExportApp(BaseModel):
     id: int
     name: str = Field(min_length=1, max_length=100)
     url: str = Field(min_length=1, max_length=500)
     description: str = Field(default="", max_length=300)
     category_id: int
+    group_id: Optional[int] = None
     icon: str = Field(default="🚀", max_length=500)
     favorite: bool = False
     open_mode: Literal['external', 'embedded'] = 'external'
@@ -419,6 +429,7 @@ class DashboardSettings(BaseModel):
     app_name: str = "My DashboardKDV"
     theme: str = "dark"
     categories: list[ExportCategory] = Field(default_factory=list)
+    groups: list[ExportGroup] = Field(default_factory=list)
     apps: list[ExportApp] = Field(default_factory=list)
     emby: dict = Field(default_factory=dict)
     background: dict = Field(default_factory=dict)
@@ -451,6 +462,20 @@ def init_db():
             sort_order INTEGER NOT NULL DEFAULT 0)"""
         )
         conn.execute(
+            """CREATE TABLE IF NOT EXISTS groups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            category_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            icon TEXT NOT NULL DEFAULT '📂',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(category_id, name),
+            FOREIGN KEY(category_id) REFERENCES categories(id) ON UPDATE CASCADE ON DELETE CASCADE)"""
+        )
+        conn.execute(
+            """CREATE INDEX IF NOT EXISTS idx_groups_category_order ON groups(category_id, sort_order, id)"""
+        )
+
+        conn.execute(
             """CREATE TABLE IF NOT EXISTS apps (
             id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, url TEXT NOT NULL,
             description TEXT NOT NULL DEFAULT '', category_id INTEGER NOT NULL,
@@ -478,6 +503,8 @@ def init_db():
             conn.execute("ALTER TABLE apps ADD COLUMN status_enabled INTEGER NOT NULL DEFAULT 1")
         if 'sort_order' not in app_columns:
             conn.execute("ALTER TABLE apps ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+        if 'group_id' not in app_columns:
+            conn.execute("ALTER TABLE apps ADD COLUMN group_id INTEGER NULL")
         for column_sql in [
             "ALTER TABLE apps ADD COLUMN tile_bg_mode TEXT NOT NULL DEFAULT 'default'",
             "ALTER TABLE apps ADD COLUMN tile_bg_value TEXT NOT NULL DEFAULT ''",
@@ -549,12 +576,17 @@ def init_db():
         conn.execute(
             """CREATE TABLE IF NOT EXISTS dashboard_preferences (
             id INTEGER PRIMARY KEY CHECK (id = 1),
-            theme TEXT NOT NULL DEFAULT 'dark'
+            theme TEXT NOT NULL DEFAULT 'dark',
+            fixed_category TEXT NOT NULL DEFAULT ''
             )"""
         )
+        pref_columns = {row['name'] for row in conn.execute("PRAGMA table_info(dashboard_preferences)").fetchall()}
+        if 'fixed_category' not in pref_columns:
+            conn.execute("ALTER TABLE dashboard_preferences ADD COLUMN fixed_category TEXT NOT NULL DEFAULT ''")
         if conn.execute("SELECT 1 FROM dashboard_preferences WHERE id=1").fetchone() is None:
-            conn.execute("INSERT INTO dashboard_preferences(id,theme) VALUES(1,'dark')")
+            conn.execute("INSERT INTO dashboard_preferences(id,theme,fixed_category) VALUES(1,'dark','')")
         conn.execute("UPDATE dashboard_preferences SET theme='dark' WHERE theme NOT IN ('dark','light') OR theme IS NULL")
+        conn.execute("UPDATE dashboard_preferences SET fixed_category='' WHERE fixed_category IS NULL")
         appearance_columns = {row['name'] for row in conn.execute("PRAGMA table_info(appearance_settings)").fetchall()}
         if 'status_checks_enabled' not in appearance_columns:
             conn.execute("ALTER TABLE appearance_settings ADD COLUMN status_checks_enabled INTEGER NOT NULL DEFAULT 1")
@@ -600,12 +632,120 @@ def index():
     return FileResponse(STATIC_DIR / "index.html")
 
 
+@app.get("/manifest.webmanifest")
+def manifest():
+    return FileResponse(
+        STATIC_DIR / "manifest.webmanifest",
+        media_type="application/manifest+json",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
+
+
+@app.get("/sw.js")
+def service_worker():
+    return FileResponse(
+        STATIC_DIR / "sw.js",
+        media_type="application/javascript",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Service-Worker-Allowed": "/",
+        },
+    )
+
+
+@app.get("/api/groups")
+def list_groups(category_id: int | None = None):
+    with db() as conn:
+        if category_id is None:
+            rows = conn.execute(
+                "SELECT id,category_id,name,icon,sort_order FROM groups ORDER BY category_id,sort_order,id"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id,category_id,name,icon,sort_order FROM groups WHERE category_id=? ORDER BY sort_order,id",
+                (category_id,),
+            ).fetchall()
+    return [dict(r) for r in rows]
+
+
+class GroupItem(BaseModel):
+    category_id: int
+    name: str = Field(min_length=1, max_length=100)
+    icon: str = Field(default="📂", max_length=500)
+
+
+@app.post("/api/groups")
+def create_group(item: GroupItem):
+    with db() as conn:
+        if not conn.execute("SELECT 1 FROM categories WHERE id=?", (item.category_id,)).fetchone():
+            raise HTTPException(400, "Категория не найдена")
+        next_order = conn.execute(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM groups WHERE category_id=?",
+            (item.category_id,),
+        ).fetchone()["next_order"]
+        try:
+            cur = conn.execute(
+                "INSERT INTO groups(category_id,name,icon,sort_order) VALUES (?,?,?,?)",
+                (item.category_id, item.name.strip(), item.icon.strip() or "📂", int(next_order)),
+            )
+        except sqlite3.IntegrityError:
+            raise HTTPException(409, "Такая группа уже существует в этой категории")
+    return {"id": cur.lastrowid, **item.model_dump(), "sort_order": int(next_order)}
+
+
+@app.put("/api/groups/{group_id}")
+def update_group(group_id: int, item: GroupItem):
+    with db() as conn:
+        if not conn.execute("SELECT 1 FROM categories WHERE id=?", (item.category_id,)).fetchone():
+            raise HTTPException(400, "Категория не найдена")
+        row = conn.execute("SELECT sort_order FROM groups WHERE id=?", (group_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Группа не найдена")
+        try:
+            conn.execute(
+                "UPDATE groups SET category_id=?,name=?,icon=? WHERE id=?",
+                (item.category_id, item.name.strip(), item.icon.strip() or "📂", group_id),
+            )
+        except sqlite3.IntegrityError:
+            raise HTTPException(409, "Такая группа уже существует в этой категории")
+    return {"id": group_id, **item.model_dump(), "sort_order": int(row["sort_order"])}
+
+
+@app.delete("/api/groups/{group_id}")
+def delete_group(group_id: int):
+    with db() as conn:
+        if not conn.execute("SELECT 1 FROM groups WHERE id=?", (group_id,)).fetchone():
+            raise HTTPException(404, "Группа не найдена")
+        conn.execute("UPDATE apps SET group_id=NULL WHERE group_id=?", (group_id,))
+        conn.execute("DELETE FROM groups WHERE id=?", (group_id,))
+    return {"ok": True}
+
+
+class ReorderGroups(BaseModel):
+    category_id: int
+    ids: list[int] = Field(default_factory=list)
+
+
+@app.post("/api/groups/reorder")
+def reorder_groups(payload: ReorderGroups):
+    incoming = [int(x) for x in payload.ids]
+    with db() as conn:
+        rows = conn.execute("SELECT id FROM groups WHERE category_id=? ORDER BY sort_order,id", (payload.category_id,)).fetchall()
+        current_ids = [int(r["id"]) for r in rows]
+        if len(incoming) != len(current_ids) or set(incoming) != set(current_ids):
+            raise HTTPException(400, "Список групп для сортировки не совпадает с текущим списком")
+        conn.executemany("UPDATE groups SET sort_order=? WHERE id=?", [(pos, gid) for pos, gid in enumerate(incoming)])
+    return {"ok": True, "count": len(incoming)}
+
+
 @app.get("/api/categories")
 def categories():
     with db() as conn:
         rows = conn.execute(
-            """SELECT c.id,c.name,c.icon,c.sort_order,COUNT(a.id) AS app_count FROM categories c
-            LEFT JOIN apps a ON a.category_id=c.id GROUP BY c.id ORDER BY c.sort_order,c.id"""
+            """SELECT c.id,c.name,c.icon,c.sort_order,COUNT(DISTINCT a.id) AS app_count,COUNT(DISTINCT g.id) AS group_count FROM categories c
+            LEFT JOIN apps a ON a.category_id=c.id
+            LEFT JOIN groups g ON g.category_id=c.id
+            GROUP BY c.id ORDER BY c.sort_order,c.id"""
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -705,11 +845,13 @@ async def discover_local_services(network: str = ""):
 def list_apps():
     with db() as conn:
         rows = conn.execute(
-            """SELECT a.id,a.name,a.url,a.description,a.category_id,a.icon,a.favorite,a.open_mode,a.size,a.status_enabled,a.sort_order,
+            """SELECT a.id,a.name,a.url,a.description,a.category_id,a.group_id,a.icon,a.favorite,a.open_mode,a.size,a.status_enabled,a.sort_order,
             a.tile_bg_mode,a.tile_bg_value,a.tile_bg_scale,a.tile_opacity,a.tile_blur,a.tile_icon_size,a.tile_title_size,
             a.tile_title_color,a.tile_description_color,a.tile_url_color,
             a.tile_show_description,a.tile_show_url,
-            c.name AS category_name,c.icon AS category_icon FROM apps a JOIN categories c ON c.id=a.category_id
+            c.name AS category_name,c.icon AS category_icon,
+            g.name AS group_name,g.icon AS group_icon FROM apps a JOIN categories c ON c.id=a.category_id
+            LEFT JOIN groups g ON g.id=a.group_id
             ORDER BY a.sort_order,a.id"""
         ).fetchall()
     return [dict(r) | {"favorite": bool(r["favorite"])} for r in rows]
@@ -735,12 +877,14 @@ def create_app(item: AppItem):
     with db() as conn:
         if not conn.execute("SELECT id FROM categories WHERE id=?", (item.category_id,)).fetchone():
             raise HTTPException(400, "Категория не найдена")
+        if item.group_id is not None and not conn.execute("SELECT 1 FROM groups WHERE id=? AND category_id=?", (item.group_id, item.category_id)).fetchone():
+            raise HTTPException(400, "Группа не относится к выбранной категории")
         next_order = conn.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM apps").fetchone()["next_order"]
         cur = conn.execute(
-            """INSERT INTO apps(name,url,description,category_id,icon,favorite,open_mode,size,status_enabled,sort_order,
+            """INSERT INTO apps(name,url,description,category_id,group_id,icon,favorite,open_mode,size,status_enabled,sort_order,
             tile_bg_mode,tile_bg_value,tile_bg_scale,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_title_color,tile_description_color,tile_url_color,tile_show_description,tile_show_url)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (item.name.strip(), item.url.strip(), item.description.strip(), item.category_id, item.icon.strip() or "🚀", int(item.favorite), item.open_mode,
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (item.name.strip(), item.url.strip(), item.description.strip(), item.category_id, item.group_id, item.icon.strip() or "🚀", int(item.favorite), item.open_mode,
              item.size, int(item.status_enabled), int(next_order), item.tile_bg_mode, item.tile_bg_value.strip(), item.tile_bg_scale, item.tile_opacity,
              item.tile_blur, item.tile_icon_size, item.tile_title_size, item.tile_title_color, item.tile_description_color, item.tile_url_color, int(item.tile_show_description), int(item.tile_show_url)),
         )
@@ -752,11 +896,13 @@ def update_app(app_id: int, item: AppItem):
     with db() as conn:
         if not conn.execute("SELECT id FROM categories WHERE id=?", (item.category_id,)).fetchone():
             raise HTTPException(400, "Категория не найдена")
+        if item.group_id is not None and not conn.execute("SELECT 1 FROM groups WHERE id=? AND category_id=?", (item.group_id, item.category_id)).fetchone():
+            raise HTTPException(400, "Группа не относится к выбранной категории")
         cur = conn.execute(
-            """UPDATE apps SET name=?,url=?,description=?,category_id=?,icon=?,favorite=?,open_mode=?,size=?,status_enabled=?,
+            """UPDATE apps SET name=?,url=?,description=?,category_id=?,group_id=?,icon=?,favorite=?,open_mode=?,size=?,status_enabled=?,
             tile_bg_mode=?,tile_bg_value=?,tile_bg_scale=?,tile_opacity=?,tile_blur=?,tile_icon_size=?,tile_title_size=?,tile_title_color=?,tile_description_color=?,tile_url_color=?,tile_show_description=?,tile_show_url=?
             WHERE id=?""",
-            (item.name.strip(), item.url.strip(), item.description.strip(), item.category_id, item.icon.strip() or "🚀", int(item.favorite), item.open_mode,
+            (item.name.strip(), item.url.strip(), item.description.strip(), item.category_id, item.group_id, item.icon.strip() or "🚀", int(item.favorite), item.open_mode,
              item.size, int(item.status_enabled), item.tile_bg_mode, item.tile_bg_value.strip(), item.tile_bg_scale, item.tile_opacity, item.tile_blur,
              item.tile_icon_size, item.tile_title_size, item.tile_title_color, item.tile_description_color, item.tile_url_color, int(item.tile_show_description), int(item.tile_show_url), app_id),
         )
@@ -769,7 +915,7 @@ def update_app(app_id: int, item: AppItem):
 def duplicate_app(app_id: int):
     with db() as conn:
         row = conn.execute(
-            """SELECT name,url,description,category_id,icon,favorite,open_mode,size,status_enabled,
+            """SELECT name,url,description,category_id,group_id,icon,favorite,open_mode,size,status_enabled,
             tile_bg_mode,tile_bg_value,tile_bg_scale,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_title_color,tile_description_color,tile_url_color,tile_show_description,tile_show_url
             FROM apps WHERE id=?""",
             (app_id,),
@@ -778,10 +924,10 @@ def duplicate_app(app_id: int):
             raise HTTPException(404, "Приложение не найдено")
         next_order = conn.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM apps").fetchone()["next_order"]
         cur = conn.execute(
-            """INSERT INTO apps(name,url,description,category_id,icon,favorite,open_mode,size,status_enabled,sort_order,
+            """INSERT INTO apps(name,url,description,category_id,group_id,icon,favorite,open_mode,size,status_enabled,sort_order,
             tile_bg_mode,tile_bg_value,tile_bg_scale,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_title_color,tile_description_color,tile_url_color,tile_show_description,tile_show_url)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (f"{row['name']} (копия)", row["url"], row["description"], row["category_id"], row["icon"], row["favorite"], row["open_mode"], row["size"], row["status_enabled"], int(next_order),
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (f"{row['name']} (копия)", row["url"], row["description"], row["category_id"], row["group_id"], row["icon"], row["favorite"], row["open_mode"], row["size"], row["status_enabled"], int(next_order),
              row["tile_bg_mode"], row["tile_bg_value"], row["tile_bg_scale"], row["tile_opacity"], row["tile_blur"], row["tile_icon_size"], row["tile_title_size"], row["tile_title_color"], row["tile_description_color"], row["tile_url_color"], row["tile_show_description"], row["tile_show_url"]),
         )
     return {"id": cur.lastrowid}
@@ -1424,19 +1570,33 @@ def test_emby_connection(payload: dict):
 @app.get("/api/preferences")
 def get_preferences():
     with db() as conn:
-        row = conn.execute("SELECT theme FROM dashboard_preferences WHERE id=1").fetchone()
-    return {"theme": row["theme"] if row else "dark"}
+        row = conn.execute("SELECT theme, fixed_category FROM dashboard_preferences WHERE id=1").fetchone()
+    return {
+        "theme": row["theme"] if row else "dark",
+        "fixed_category": row["fixed_category"] if row and row["fixed_category"] else "",
+    }
 
 
 @app.put("/api/preferences")
 def update_preferences(payload: dict):
-    theme = "light" if str(payload.get("theme", "dark")).lower() == "light" else "dark"
     with db() as conn:
+        current = conn.execute("SELECT theme, fixed_category FROM dashboard_preferences WHERE id=1").fetchone()
+        current_theme = current["theme"] if current else "dark"
+        current_fixed = current["fixed_category"] if current else ""
+        theme = "light" if str(payload.get("theme", current_theme)).lower() == "light" else "dark"
+        fixed_category = str(payload.get("fixed_category", current_fixed) or "").strip()
+        if fixed_category in ("all", "favorites", ""):
+            pass
+        elif re.fullmatch(r"\d+", fixed_category):
+            if not conn.execute("SELECT 1 FROM categories WHERE id=?", (int(fixed_category),)).fetchone():
+                raise HTTPException(400, "Указанная группа не найдена")
+        else:
+            raise HTTPException(400, "Некорректная фиксированная группа")
         conn.execute(
-            "INSERT INTO dashboard_preferences(id,theme) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET theme=excluded.theme",
-            (theme,),
+            "INSERT INTO dashboard_preferences(id,theme,fixed_category) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET theme=excluded.theme,fixed_category=excluded.fixed_category",
+            (theme, fixed_category),
         )
-    return {"theme": theme}
+    return {"theme": theme, "fixed_category": fixed_category}
 
 
 def _read_local_asset(path_value: str) -> tuple[str, Path] | None:
@@ -1535,7 +1695,8 @@ def export_settings(theme: str = "dark"):
 
     with db() as conn:
         categories = [dict(r) for r in conn.execute("SELECT id,name,icon,sort_order FROM categories ORDER BY sort_order,id").fetchall()]
-        apps = [dict(r) for r in conn.execute("""SELECT id,name,url,description,category_id,icon,favorite,open_mode,size,status_enabled,sort_order,
+        groups = [dict(r) for r in conn.execute("SELECT id,category_id,name,icon,sort_order FROM groups ORDER BY category_id,sort_order,id").fetchall()]
+        apps = [dict(r) for r in conn.execute("""SELECT id,name,url,description,category_id,group_id,icon,favorite,open_mode,size,status_enabled,sort_order,
         tile_bg_mode,tile_bg_value,tile_bg_scale,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_title_color,tile_description_color,tile_url_color,tile_show_description,tile_show_url
         FROM apps ORDER BY sort_order,id""").fetchall()]
     for item in apps:
@@ -1563,21 +1724,26 @@ def export_settings(theme: str = "dark"):
         background_export["asset_path"] = bg_entry["path"]
 
     with db() as conn:
-        pref_row = conn.execute("SELECT theme FROM dashboard_preferences WHERE id=1").fetchone()
+        pref_row = conn.execute("SELECT theme, fixed_category FROM dashboard_preferences WHERE id=1").fetchone()
     stored_theme = pref_row["theme"] if pref_row else ("light" if theme == "light" else "dark")
+    stored_fixed_category = pref_row["fixed_category"] if pref_row else ""
 
     return {
-        "version": 8,
+        "version": 10,
         "app_name": "My DashboardKDV",
         "theme": "light" if stored_theme == "light" else "dark",
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "categories": categories,
+        "groups": groups,
         "apps": apps,
         "emby": get_emby_config(),
         "background": background_export,
         "appearance": _appearance_settings(),
         "assets": list(assets.values()),
-        "preferences": {"theme": "light" if stored_theme == "light" else "dark"},
+        "preferences": {
+            "theme": "light" if stored_theme == "light" else "dark",
+            "fixed_category": stored_fixed_category or "",
+        },
     }
 
 
@@ -1598,6 +1764,16 @@ def import_settings(settings: DashboardSettings):
                     (category.name.strip(), path_map.get(category.icon.strip(), category.icon.strip()) or "📁", int(getattr(category, "sort_order", 0))),
                 )
                 old_to_new[category.id] = cur.lastrowid
+            old_group_to_new = {}
+            for group in settings.groups:
+                new_category_id = old_to_new.get(group.category_id)
+                if new_category_id is None:
+                    raise ValueError(f"Категория для группы «{group.name}» не найдена")
+                cur = conn.execute(
+                    "INSERT INTO groups(category_id,name,icon,sort_order) VALUES (?,?,?,?)",
+                    (new_category_id, group.name.strip(), path_map.get(group.icon.strip(), group.icon.strip()) or "📂", int(getattr(group, "sort_order", 0))),
+                )
+                old_group_to_new[group.id] = cur.lastrowid
             has_explicit_order = any(getattr(app_item, "sort_order", 0) != 0 for app_item in settings.apps)
             for index, app_item in enumerate(settings.apps):
                 new_category_id = old_to_new.get(app_item.category_id)
@@ -1605,14 +1781,15 @@ def import_settings(settings: DashboardSettings):
                     raise ValueError(f"Категория для приложения «{app_item.name}» не найдена")
                 sort_order = int(app_item.sort_order) if has_explicit_order else index
                 conn.execute(
-                    """INSERT INTO apps(name,url,description,category_id,icon,favorite,open_mode,size,status_enabled,sort_order,
+                    """INSERT INTO apps(name,url,description,category_id,group_id,icon,favorite,open_mode,size,status_enabled,sort_order,
                     tile_bg_mode,tile_bg_value,tile_bg_scale,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_title_color,tile_description_color,tile_url_color,tile_show_description,tile_show_url)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         app_item.name.strip(),
                         app_item.url.strip(),
                         app_item.description.strip(),
                         new_category_id,
+                        old_group_to_new.get(app_item.group_id) if app_item.group_id is not None else None,
                         path_map.get(app_item.icon.strip(), app_item.icon.strip()) or "🚀",
                         int(app_item.favorite),
                         app_item.open_mode,
@@ -1682,9 +1859,17 @@ def import_settings(settings: DashboardSettings):
             preferences = raw_settings.get("preferences") if isinstance(raw_settings, dict) else None
             if isinstance(preferences, dict):
                 theme = "light" if str(preferences.get("theme", "dark")).lower() == "light" else "dark"
+                fixed_category = str(preferences.get("fixed_category", "") or "").strip()
+                if fixed_category not in ("", "all", "favorites"):
+                    if not re.fullmatch(r"\d+", fixed_category):
+                        fixed_category = ""
+                    else:
+                        old_category_id = int(fixed_category)
+                        new_category_id = old_to_new.get(old_category_id)
+                        fixed_category = str(new_category_id) if new_category_id is not None else ""
                 conn.execute(
-                    "INSERT INTO dashboard_preferences(id,theme) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET theme=excluded.theme",
-                    (theme,),
+                    "INSERT INTO dashboard_preferences(id,theme,fixed_category) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET theme=excluded.theme,fixed_category=excluded.fixed_category",
+                    (theme, fixed_category),
                 )
     except sqlite3.IntegrityError as exc:
         raise HTTPException(400, f"Не удалось импортировать настройки: {exc}")

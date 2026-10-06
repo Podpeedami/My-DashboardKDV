@@ -1,9 +1,12 @@
-let apps = [], categories = [], selectedCategory = "all", embyTimer = null;
+let apps = [], categories = [], groups = [], selectedCategory = "all", selectedGroup = "all", embyTimer = null;
 let panelEditMode = false, dragAppId = null, dragCategoryId = null;
 let draftAppOrder = null, draftCategoryOrder = null, draftAppChanges = new Map();
 let backgroundSettings = {enabled:false, url:"", opacity:0.35};
 let appearanceSettings = {card_opacity:0.90, card_blur:6, background_blur:2, background_dim:0.55};
 let currentTheme = localStorage.getItem("mdkdv-theme") === "light" ? "light" : "dark";
+let fixedCategory = "";
+let deferredPwaInstallPrompt = null;
+
 
 
 function applyTheme(theme, persist = true){
@@ -282,14 +285,21 @@ async function loadPreferences(){
       localStorage.setItem('mdkdv-theme', currentTheme);
       applyTheme(currentTheme,false);
     }
+    fixedCategory=String(data?.fixed_category||'');
   }catch(e){console.error(e)}
 }
 
 async function loadData(){
-  const [cr, ar] = await Promise.all([fetch('/api/categories', {cache:'no-store'}), fetch('/api/apps', {cache:'no-store'})]);
+  const [cr, gr, ar] = await Promise.all([
+    fetch('/api/categories', {cache:'no-store'}),
+    fetch('/api/groups', {cache:'no-store'}),
+    fetch('/api/apps', {cache:'no-store'})
+  ]);
   const categoryData = await cr.json().catch(()=>[]);
+  const groupData = await gr.json().catch(()=>[]);
   const appData = await ar.json().catch(()=>[]);
   if(!cr.ok) throw new Error(categoryData?.detail || `Ошибка загрузки категорий (${cr.status})`);
+  if(!gr.ok) throw new Error(groupData?.detail || `Ошибка загрузки групп (${gr.status})`);
   if(!ar.ok) throw new Error(appData?.detail || `Ошибка загрузки приложений (${ar.status})`);
   categories = Array.isArray(categoryData) ? categoryData.map(c=>({
     ...c,
@@ -297,7 +307,16 @@ async function loadData(){
     name:String(c.name ?? ''),
     icon:String(c.icon ?? '📁'),
     sort_order:Number(c.sort_order ?? 0),
-    app_count:Number(c.app_count ?? 0)
+    app_count:Number(c.app_count ?? 0),
+    group_count:Number(c.group_count ?? 0)
+  })) : [];
+  groups = Array.isArray(groupData) ? groupData.map(g=>({
+    ...g,
+    id:Number(g.id),
+    category_id:Number(g.category_id),
+    name:String(g.name ?? ''),
+    icon:String(g.icon ?? '📂'),
+    sort_order:Number(g.sort_order ?? 0)
   })) : [];
   apps = Array.isArray(appData) ? appData.map(a => ({
     ...a,
@@ -306,6 +325,7 @@ async function loadData(){
     url:String(a.url ?? ''),
     description:String(a.description ?? ''),
     category_id:Number(a.category_id),
+    group_id:a.group_id===null||a.group_id===undefined?null:Number(a.group_id),
     icon:String(a.icon ?? '🚀'),
     favorite:Boolean(a.favorite),
     open_mode: a.open_mode === 'embedded' ? 'embedded' : 'external',
@@ -314,10 +334,20 @@ async function loadData(){
     tile_bg_value: String(a.tile_bg_value || '').trim(),
     tile_bg_scale: Math.round(clampNumber(a.tile_bg_scale,50,200,100))
   })) : [];
-  if(selectedCategory !== "all" && selectedCategory !== "favorites" && !categories.some(c => c.id === selectedCategory)) selectedCategory = "all";
+  if(fixedCategory){
+    if(fixedCategory==='all') selectedCategory='all';
+    else if(fixedCategory==='favorites') selectedCategory='favorites';
+    else if(/^\d+$/.test(fixedCategory) && categories.some(c=>c.id===Number(fixedCategory))) selectedCategory=Number(fixedCategory);
+    else { fixedCategory=''; selectedCategory='all'; }
+  } else if(selectedCategory !== "all" && selectedCategory !== "favorites" && !categories.some(c => c.id === selectedCategory)) selectedCategory = "all";
+  if(typeof selectedCategory === 'number' && selectedGroup !== 'all' && !groups.some(g=>g.id===selectedGroup && g.category_id===selectedCategory)) selectedGroup='all';
+  if(selectedCategory==='all' || selectedCategory==='favorites') selectedGroup='all';
   renderCategories();
+  renderGroupBar();
   renderApps();
   fillCategorySelect();
+  fillGroupSelect();
+  populateFixedCategorySelect();
 }
 
 function renderCategories(){
@@ -337,27 +367,54 @@ function renderCategories(){
     }).join('')}`;
 }
 
-function selectCategory(id){selectedCategory=id;renderCategories();renderApps()}
+function selectCategory(id){selectedCategory=id;selectedGroup='all';renderCategories();renderGroupBar();fillGroupSelect();renderApps()}
+
+function renderGroupBar(){
+  const bar=document.getElementById('groupsBar');
+  if(!bar)return;
+  const visible=typeof selectedCategory==='number' ? groups.filter(g=>g.category_id===selectedCategory).sort((a,b)=>(a.sort_order-b.sort_order)||(a.id-b.id)) : [];
+  if(!visible.length){bar.classList.add('hidden');bar.innerHTML='';return;}
+  bar.classList.remove('hidden');
+  bar.innerHTML=`<button class="group-filter ${selectedGroup==='all'?'active':''}" onclick="selectGroup('all')">Все группы <span class="count">${apps.filter(a=>a.category_id===selectedCategory).length}</span></button>${visible.map(g=>`<button class="group-filter ${selectedGroup===g.id?'active':''}" onclick="selectGroup(${g.id})">${iconHtml(g.icon,'group-icon')} ${escapeHtml(g.name)} <span class="count">${apps.filter(a=>a.group_id===g.id).length}</span></button>`).join('')}`;
+}
+
+function selectGroup(id){selectedGroup=id;renderGroupBar();renderApps()}
 
 function renderApps(){
   const q=(document.getElementById('search')?.textContent||'').toLowerCase().trim();
   if(panelEditMode && q) cancelPanelEditMode();
   const filtered=apps.filter(a=>{
     const cat=selectedCategory==='all'||(selectedCategory==='favorites'&&a.favorite)||a.category_id===selectedCategory;
+    const group=selectedGroup==='all'||a.group_id===selectedGroup;
     const s=a.name.toLowerCase().includes(q)||a.description.toLowerCase().includes(q)||a.url.toLowerCase().includes(q);
-    return cat&&s;
+    return cat&&group&&s;
   });
   const d=document.getElementById('dashboard');
   const qHint=panelEditMode ? '<div class="order-edit-note">✏️ Режим редактирования: перетаскивайте приложения и категории. Нажмите «Сохранить макет».</div>' : '';
   const orderedFiltered = panelEditMode && Array.isArray(draftAppOrder)
     ? draftAppOrder.map(id=>apps.find(a=>a.id===id)).filter(Boolean).filter(a=>filtered.some(f=>f.id===a.id))
     : filtered;
-  d.innerHTML=!orderedFiltered.length
-    ? '<div class="empty">В этой категории пока нет приложений</div>'
-    : `<div class="group">${qHint}<div class="group-title">${escapeHtml(currentTitle())}</div><div class="grid ${panelEditMode?'edit-grid':''}">${orderedFiltered.map(appCard).join('')}</div></div>`;
+
+  if(!orderedFiltered.length){d.innerHTML='<div class="empty">В этой группе пока нет приложений</div>';return;}
+
+  const section=(title,list)=>`<div class="group"><div class="group-title">${escapeHtml(title)}</div><div class="grid ${panelEditMode?'edit-grid':''}">${list.map(appCard).join('')}</div></div>`;
+  if(typeof selectedCategory==='number'){
+    const groupList=groups.filter(g=>g.category_id===selectedCategory).sort((a,b)=>(a.sort_order-b.sort_order)||(a.id-b.id));
+    const parts=[];
+    if(selectedGroup==='all'){
+      const ungrouped=orderedFiltered.filter(a=>a.group_id===null);
+      if(ungrouped.length)parts.push(section('Без группы',ungrouped));
+      for(const g of groupList){const list=orderedFiltered.filter(a=>a.group_id===g.id);if(list.length)parts.push(section(`${g.icon} ${g.name}`,list));}
+    }else{
+      parts.push(section(currentTitle(),orderedFiltered));
+    }
+    d.innerHTML=qHint+parts.join('');
+  }else{
+    d.innerHTML=`<div class="group"><div class="group-title">${escapeHtml(currentTitle())}</div><div class="grid ${panelEditMode?'edit-grid':''}">${orderedFiltered.map(appCard).join('')}</div></div>`;
+  }
 }
 
-function currentTitle(){if(selectedCategory==='all')return'Все приложения';if(selectedCategory==='favorites')return'Избранное';return categories.find(c=>c.id===selectedCategory)?.name||''}
+function currentTitle(){if(selectedCategory==='all')return'Все приложения';if(selectedCategory==='favorites')return'Избранное';if(selectedGroup!=='all')return groups.find(g=>g.id===selectedGroup)?.name||'';return categories.find(c=>c.id===selectedCategory)?.name||''}
 
 function clampNumber(value,min,max,fallback){
   const n=Number(value);
@@ -535,7 +592,7 @@ async function savePanelLayout(){
       const a=apps.find(x=>x.id===id);
       if(!a)continue;
       const payload={
-        name:a.name,url:a.url,description:a.description,category_id:a.category_id,icon:a.icon,favorite:!!a.favorite,
+        name:a.name,url:a.url,description:a.description,category_id:a.category_id,group_id:a.group_id===null||a.group_id===undefined?null:Number(a.group_id),icon:a.icon,favorite:!!a.favorite,
         size:change.size||a.size,status_enabled:a.status_enabled!==false,
         tile_bg_mode:a.tile_bg_mode||'default',tile_bg_value:a.tile_bg_value||'',tile_bg_scale:Math.round(clampNumber(a.tile_bg_scale,50,200,100)),
         tile_opacity:Number.isFinite(Number(a.tile_opacity))?Number(a.tile_opacity):0.90,
@@ -669,9 +726,9 @@ function syncIconPicker(inputId,containerId){
   if(!input||!container)return;
   const value=input.value.trim();
   container.querySelectorAll('.icon-choice').forEach(btn=>btn.classList.toggle('selected',btn.dataset.icon===value));
-  const preview=document.getElementById(inputId==='icon'?'appIconPreview':'categoryIconPreview');
+  const preview=document.getElementById(inputId==='icon'?'appIconPreview':inputId==='groupIcon'?'groupIconPreview':'categoryIconPreview');
   if(preview)preview.innerHTML=iconHtml(value,'preview-image');
-  const state=document.getElementById(inputId==='icon'?'appIconSourceStatus':'categoryIconSourceStatus');
+  const state=document.getElementById(inputId==='icon'?'appIconSourceStatus':inputId==='groupIcon'?'groupIconSourceStatus':'categoryIconSourceStatus');
   if(state)state.textContent=value.startsWith('/icons/')?'Локальная иконка сохранена':(value?'Emoji / текстовый значок':'Иконка не выбрана');
 }
 
@@ -893,6 +950,7 @@ async function persistTileAppearanceForExistingApp(){
     url:document.getElementById('url').value.trim(),
     description:document.getElementById('description').value.trim(),
     category_id:Number(document.getElementById('categoryId').value),
+    group_id:(document.getElementById('groupId')?.value||'') ? Number(document.getElementById('groupId').value) : null,
     icon:document.getElementById('icon').value.trim()||'🚀',
     favorite:document.getElementById('favorite').checked,
     open_mode:document.getElementById('openMode').value==='embedded'?'embedded':'external',
@@ -937,6 +995,41 @@ async function importTileBackgroundFromUrl(){
   }catch(e){alert(e.message)}
 }
 
+function fillGroupSelect(preferredId=null){
+  const select=document.getElementById('groupId');
+  if(!select)return;
+  const categoryId=Number(document.getElementById('categoryId')?.value||0);
+  const current=preferredId!==null&&preferredId!==undefined ? Number(preferredId) : Number(select.value||0);
+  const list=groups.filter(g=>g.category_id===categoryId).sort((a,b)=>(a.sort_order-b.sort_order)||(a.id-b.id));
+  select.innerHTML=`<option value="">Без группы</option>`+list.map(g=>`<option value="${g.id}">${iconHtml(g.icon,'select-icon')} ${escapeHtml(g.name)}</option>`).join('');
+  if(list.some(g=>g.id===current))select.value=String(current);else select.value='';
+}
+
+function openGroupModal(g=null){
+  if(typeof selectedCategory!=='number'){alert('Сначала выберите категорию');return}
+  document.getElementById('groupModal').classList.remove('hidden');
+  document.getElementById('groupModalTitle').textContent=g?'Изменить группу':'Создать группу';
+  document.getElementById('groupEditId').value=g?.id||'';
+  document.getElementById('groupCategoryId').value=selectedCategory;
+  document.getElementById('groupName').value=g?.name||'';
+  document.getElementById('groupIcon').value=g?.icon||'📂';
+  document.getElementById('groupIconUrl').value='';
+  renderIconChoices('groupIconChoices','groupIcon',categoryIcons);
+}
+function closeGroupModal(){document.getElementById('groupModal')?.classList.add('hidden')}
+async function saveGroup(e){
+  e.preventDefault();
+  const id=document.getElementById('groupEditId').value;
+  const item={category_id:Number(document.getElementById('groupCategoryId').value),name:document.getElementById('groupName').value.trim(),icon:document.getElementById('groupIcon').value.trim()||'📂'};
+  const r=await fetch(id?`/api/groups/${id}`:'/api/groups',{method:id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(item)});
+  if(!r.ok){alert((await r.json()).detail||'Ошибка сохранения группы');return}
+  closeGroupModal();
+  await loadData();
+  if(data?.id) { selectedGroup=Number(data.id); renderGroupBar(); renderApps(); }
+}
+function editSelectedGroup(){if(typeof selectedCategory!=='number'||selectedGroup==='all'){alert('Сначала выберите группу');return}const g=groups.find(x=>x.id===selectedGroup);if(g)openGroupModal(g)}
+async function deleteSelectedGroup(){if(typeof selectedCategory!=='number'||selectedGroup==='all'){alert('Сначала выберите группу');return}const g=groups.find(x=>x.id===selectedGroup);if(!g||!confirm(`Удалить группу «${g.name}»? Приложения останутся в категории без группы.`))return;const r=await fetch(`/api/groups/${g.id}`,{method:'DELETE'});if(!r.ok){alert((await r.json()).detail||'Ошибка удаления группы');return}selectedGroup='all';await loadData();}
+
 function openAppModal(a=null){
   document.getElementById('modal').classList.remove('hidden');
   document.getElementById('modalTitle').textContent=a?'Изменить приложение':'Добавить приложение';
@@ -954,6 +1047,7 @@ function openAppModal(a=null){
   fillCategorySelect();
   if(a)document.getElementById('categoryId').value=a.category_id;
   else if(typeof selectedCategory==='number')document.getElementById('categoryId').value=selectedCategory;
+  fillGroupSelect(a?.group_id ?? (typeof selectedCategory==='number' && selectedGroup!=='all' ? selectedGroup : null));
   updateTileSizePreview();
 }
 
@@ -968,6 +1062,7 @@ async function saveApp(e){
     url:document.getElementById('url').value.trim(),
     description:document.getElementById('description').value.trim(),
     category_id:Number(document.getElementById('categoryId').value),
+    group_id:(document.getElementById('groupId')?.value||'') ? Number(document.getElementById('groupId').value) : null,
     icon:document.getElementById('icon').value.trim()||'🚀',
     favorite:document.getElementById('favorite').checked,
     open_mode:document.getElementById('openMode').value==='embedded'?'embedded':'external',
@@ -1102,7 +1197,37 @@ function addDiscoveredLocalService(index){
   });
 }
 
-function openSettingsModal(){const modal=document.getElementById('settingsModal');if(modal)modal.classList.remove('hidden');applyTheme(currentTheme,false);syncAppearanceControls();loadEmbyConfig();loadBackgroundConfig();loadAppearanceConfig();guessLocalDiscoveryNetwork()}
+function populateFixedCategorySelect(){
+  const select=document.getElementById('fixedCategory');
+  if(!select)return;
+  const options=[
+    '<option value="">Не фиксировать</option>',
+    '<option value="all">🏠 Все приложения</option>',
+    '<option value="favorites">⭐ Избранное</option>',
+    ...categories.map(c=>`<option value="${c.id}">${iconHtml(c.icon,'select-icon')} ${escapeHtml(c.name)}</option>`)
+  ];
+  select.innerHTML=options.join('');
+  select.value=fixedCategory;
+}
+
+async function saveFixedCategory(){
+  const select=document.getElementById('fixedCategory');
+  const value=String(select?.value||'');
+  try{
+    const r=await fetch('/api/preferences',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({theme:currentTheme,fixed_category:value})});
+    const data=await r.json();
+    if(!r.ok)throw new Error(data.detail||'Не удалось сохранить группу');
+    fixedCategory=String(data.fixed_category||'');
+    if(fixedCategory==='all') selectedCategory='all';
+    else if(fixedCategory==='favorites') selectedCategory='favorites';
+    else if(/^\d+$/.test(fixedCategory)) selectedCategory=Number(fixedCategory);
+    renderCategories();renderApps();
+    const hint=document.getElementById('fixedCategoryHint');
+    if(hint)hint.textContent=fixedCategory?'При открытии Dashboard будет автоматически показана выбранная группа.':'Автоматическая фиксация отключена.';
+  }catch(e){alert(e.message)}
+}
+
+function openSettingsModal(){const modal=document.getElementById('settingsModal');if(modal)modal.classList.remove('hidden');applyTheme(currentTheme,false);populateFixedCategorySelect();const hint=document.getElementById('fixedCategoryHint');if(hint)hint.textContent=fixedCategory?'При открытии Dashboard будет автоматически показана выбранная группа.':'Автоматическая фиксация отключена.';syncAppearanceControls();loadEmbyConfig();loadBackgroundConfig();loadAppearanceConfig();guessLocalDiscoveryNetwork()}
 function closeSettingsModal(){const modal=document.getElementById('settingsModal');if(modal)modal.classList.add('hidden');const file=document.getElementById('settingsFile');if(file)file.value=''}
 
 async function exportSettings(){
@@ -1135,6 +1260,7 @@ async function importSettingsFile(event){
     selectedCategory='all';
     if(data.preferences?.theme==='light'||data.preferences?.theme==='dark'){ currentTheme=data.preferences.theme; localStorage.setItem('mdkdv-theme',currentTheme); applyTheme(currentTheme,false); }
     closeSettingsModal();
+    await loadPreferences();
     await loadData();
     await loadBackgroundConfig();
     await loadAppearanceConfig();
@@ -1145,7 +1271,39 @@ async function importSettingsFile(event){
 function escapeHtml(v){return String(v??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;')}
 function escapeAttr(v){return escapeHtml(v)}
 
+async function registerPwa(){
+  if(!('serviceWorker' in navigator)) return;
+  try{
+    const registration=await navigator.serviceWorker.register('/sw.js',{scope:'/'});
+    registration.update().catch(()=>{});
+  }catch(e){console.warn('PWA service worker registration failed',e)}
+}
+
+function setupPwaInstall(){
+  const installButton=document.getElementById('pwaInstallButton');
+  if(!installButton) return;
+  const isStandalone=window.matchMedia && window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone===true;
+  if(isStandalone){installButton.classList.add('hidden');return;}
+  window.addEventListener('beforeinstallprompt',event=>{
+    event.preventDefault();
+    deferredPwaInstallPrompt=event;
+    installButton.classList.remove('hidden');
+  });
+  window.addEventListener('appinstalled',()=>{
+    deferredPwaInstallPrompt=null;
+    installButton.classList.add('hidden');
+  });
+  installButton.addEventListener('click',async()=>{
+    if(!deferredPwaInstallPrompt) return;
+    deferredPwaInstallPrompt.prompt();
+    try{await deferredPwaInstallPrompt.userChoice}catch(e){}
+    deferredPwaInstallPrompt=null;
+    installButton.classList.add('hidden');
+  });
+}
+
 document.addEventListener('DOMContentLoaded',()=>{
+
   const searchField=document.getElementById('search');
   if(searchField){
     searchField.textContent='';
@@ -1168,15 +1326,22 @@ document.addEventListener('DOMContentLoaded',()=>{
   if(panelEditCancel)panelEditCancel.addEventListener('click',cancelPanelEditMode);
   const tileSize=document.getElementById('tileSize');
   if(tileSize)tileSize.addEventListener('change',updateTileSizePreview);
+  const categorySelect=document.getElementById('categoryId');
+  if(categorySelect)categorySelect.addEventListener('change',()=>fillGroupSelect());
   ['tileBgMode','tileBgColor','tileBgImage','tileOpacity','tileBlur','tileIconSize','tileTitleSize','tileTitleColor','tileDescriptionColor','tileUrlColor','tileShowDescription','tileShowUrl'].forEach(id=>{
     const el=document.getElementById(id);
     if(el)el.addEventListener(el.type==='range'||el.type==='checkbox'||el.type==='color'?'input':'change',updateTileAppearancePreview);
   });
-  document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeSettingsModal();closeModal();closeCategoryModal()}});
-  loadData().catch(e=>{console.error(e);document.getElementById('dashboard').innerHTML='<div class="empty">Ошибка загрузки Dashboard</div>'});
+  document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeSettingsModal();closeModal();closeCategoryModal();closeGroupModal()}});
+  (async()=>{
+    await loadPreferences();
+    await loadData();
+  })().catch(e=>{console.error(e);document.getElementById('dashboard').innerHTML='<div class="empty">Ошибка загрузки Dashboard</div>'});
   loadBackgroundConfig();
   loadAppearanceConfig();
   startEmbyPolling();
+  setupPwaInstall();
+  registerPwa();
 });
 
 // The Dashboard search is a contenteditable element rather than a form input.

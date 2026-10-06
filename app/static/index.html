@@ -2,9 +2,17 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#111827">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="My DashboardKDV">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="192x192" href="/static/pwa/icon-192.png">
+  <link rel="apple-touch-icon" href="/static/pwa/icon-192.png">
   <title>My DashboardKDV</title>
-  <link rel="stylesheet" href="/static/style.css?v=54">
+  <link rel="stylesheet" href="/static/style.css?v=53">
 </head>
 <body>
 <div class="background"><div id="backgroundImage" class="background-image"></div></div>
@@ -15,7 +23,7 @@
       <div class="brand">My DashboardKDV</div>
       <h1>Все приложения в одном месте</h1>
     </div>
-    <div class="header-actions"><button id="themeToggle" type="button">☀️ Светлая</button><button id="settingsButton" type="button">⚙ Настройки</button><button id="panelEditButton" type="button">✏️ Редактировать</button><button id="panelEditCancel" type="button" class="hidden">✖ Отмена</button><button class="primary" onclick="openAppModal()">＋ Приложение</button></div>
+    <div class="header-actions"><button id="themeToggle" type="button">☀️ Светлая</button><button id="settingsButton" type="button">⚙ Настройки</button><button id="pwaInstallButton" type="button" class="hidden">📲 Установить</button><button id="panelEditButton" type="button">✏️ Редактировать</button><button id="panelEditCancel" type="button" class="hidden">✖ Отмена</button><button class="primary" onclick="openAppModal()">＋ Приложение</button></div>
   </header>
 
   <section class="toolbar">
@@ -34,7 +42,12 @@
     <button onclick="openCategoryModal()">＋ Создать категорию</button>
     <button onclick="editSelectedCategory()">✎ Изменить категорию</button>
     <button onclick="deleteSelectedCategory()">🗑 Удалить категорию</button>
+    <button onclick="openGroupModal()">＋ Создать группу</button>
+    <button onclick="editSelectedGroup()">✎ Изменить группу</button>
+    <button onclick="deleteSelectedGroup()">🗑 Удалить группу</button>
   </section>
+
+  <div id="groupsBar" class="groups-bar hidden"></div>
 
   <section id="dashboard"></section>
 
@@ -69,6 +82,10 @@
 
       <label>Категория
         <select id="categoryId" required></select>
+      </label>
+
+      <label>Группа внутри категории
+        <select id="groupId"><option value="">Без группы</option></select>
       </label>
 
       <label>Размер плитки
@@ -221,6 +238,15 @@
     </div>
 
     <div class="settings-section">
+      <h3>📌 Фиксация группы</h3>
+      <label>Группа при открытии Dashboard
+        <select id="fixedCategory"></select>
+      </label>
+      <button class="primary full" type="button" onclick="saveFixedCategory()">💾 Сохранить группу</button>
+      <div id="fixedCategoryHint" class="settings-note compact">Автоматическая фиксация отключена.</div>
+    </div>
+
+    <div class="settings-section">
       <h3>🖼 Фоновое изображение</h3>
       <div id="backgroundPreview" class="background-preview"><span>Фон не установлен</span></div>
       <div class="background-source-row">
@@ -332,6 +358,40 @@
 </div>
 
 
+<div id="groupModal" class="modal hidden">
+  <div class="modal-card small">
+    <button class="close" onclick="closeGroupModal()">×</button>
+    <h2 id="groupModalTitle">Создать группу</h2>
+    <form onsubmit="saveGroup(event)">
+      <input type="hidden" id="groupEditId">
+      <input type="hidden" id="groupCategoryId">
+      <label>Название
+        <input id="groupName" required maxlength="100" placeholder="Например: Медиасерверы">
+      </label>
+      <div class="icon-field">
+        <div class="icon-label-row">
+          <label for="groupIcon">Иконка</label>
+          <span id="groupIconPreview" class="icon-preview">📂</span>
+          <button type="button" class="icon-clear" onclick="clearIcon('groupIcon','groupIconChoices')">Очистить</button>
+        </div>
+        <input id="groupIcon" value="📂" maxlength="500" placeholder="Emoji или локальная иконка" oninput="syncIconPicker('groupIcon','groupIconChoices')">
+        <div class="icon-source-row">
+          <label class="icon-source-button">🖼 Выбрать файл
+            <input type="file" accept=".png,.jpg,.jpeg,.webp,.gif,.ico,image/png,image/jpeg,image/webp,image/gif,image/x-icon" onchange="uploadIconFile('groupIcon','groupIconChoices','groupIconSourceStatus',event)">
+          </label>
+        </div>
+        <div class="icon-url-row">
+          <input id="groupIconUrl" placeholder="URL изображения: https://site.com/icon.png">
+          <button type="button" onclick="importIconFromUrl('groupIcon','groupIconChoices','groupIconUrl','groupIconSourceStatus')">Загрузить URL</button>
+        </div>
+        <div id="groupIconSourceStatus" class="icon-status">Emoji / текстовый значок</div>
+        <div id="groupIconChoices" class="icon-choices"></div>
+      </div>
+      <button class="primary full" type="submit">Сохранить</button>
+    </form>
+  </div>
+</div>
+
 <div id="embeddedAppModal" class="embedded-app-modal hidden" role="dialog" aria-modal="true" aria-label="Встроенное приложение">
   <div class="embedded-app-shell">
     <header class="embedded-app-header">
@@ -355,7 +415,7 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=54"></script>
+<script src="/static/app.js?v=53"></script>
 
 </body>
 </html>
