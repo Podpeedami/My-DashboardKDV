@@ -12,7 +12,7 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/static/pwa/icon-192.png">
   <link rel="apple-touch-icon" href="/static/pwa/icon-192.png">
   <title>My DashboardKDV</title>
-  <link rel="stylesheet" href="/static/style.css?v=53">
+  <link rel="stylesheet" href="/static/style.css?v=54">
 </head>
 <body>
 <div class="background"><div id="backgroundImage" class="background-image"></div></div>
@@ -39,12 +39,7 @@
 
   <section class="category-tools">
     <div id="orderEditHint" class="order-edit-hint"></div>
-    <button onclick="openCategoryModal()">＋ Создать категорию</button>
-    <button onclick="editSelectedCategory()">✎ Изменить категорию</button>
-    <button onclick="deleteSelectedCategory()">🗑 Удалить категорию</button>
-    <button onclick="openGroupModal()">＋ Создать группу</button>
-    <button onclick="editSelectedGroup()">✎ Изменить группу</button>
-    <button onclick="deleteSelectedGroup()">🗑 Удалить группу</button>
+    <button type="button" class="group-manage-button" onclick="openGroupManager()">📁 Группы</button>
   </section>
 
   <div id="groupsBar" class="groups-bar hidden"></div>
@@ -218,104 +213,132 @@
   <div class="modal-card settings-card">
     <button class="close" onclick="closeSettingsModal()">×</button>
     <h2>Настройки панели</h2>
-    <p class="settings-note">Полный экспорт сохраняет приложения, категории, порядок, оформление плиток, фон, локальные иконки и изображения плиток. Файл можно перенести на другой компьютер.</p>
-    <div class="settings-actions">
-      <button class="primary" type="button" onclick="exportSettings()">💾 Экспортировать настройки</button>
-      <label class="file-button">📥 Импортировать настройки
-        <input id="settingsFile" type="file" accept="application/json,.json" onchange="importSettingsFile(event)">
-      </label>
-    </div>
+    <p class="settings-note">Настройки разделены по группам, чтобы нужные параметры было проще находить.</p>
+    <nav class="settings-tabs" aria-label="Группы настроек">
+      <button type="button" class="settings-tab active" data-settings-group="general" onclick="switchSettingsGroup('general')">⚙ Основные</button>
+      <button type="button" class="settings-tab" data-settings-group="appearance" onclick="switchSettingsGroup('appearance')">🎨 Оформление</button>
+      <button type="button" class="settings-tab" data-settings-group="data" onclick="switchSettingsGroup('data')">💾 Данные</button>
+      <button type="button" class="settings-tab" data-settings-group="integrations" onclick="switchSettingsGroup('integrations')">📺 Интеграции</button>
+      <button type="button" class="settings-tab" data-settings-group="network" onclick="switchSettingsGroup('network')">🌐 Сеть</button>
+    </nav>
 
-    <div class="settings-section">
-      <h3>🎨 Тема</h3>
-      <label>Оформление
-        <select id="themeSelect">
-          <option value="dark">🌙 Тёмная</option>
-          <option value="light">☀️ Светлая</option>
-        </select>
-      </label>
-      <div class="settings-note compact">Тема сохраняется в браузере и включается автоматически при следующем открытии Dashboard.</div>
-    </div>
-
-    <div class="settings-section">
-      <h3>📌 Фиксация группы</h3>
-      <label>Группа при открытии Dashboard
-        <select id="fixedCategory"></select>
-      </label>
-      <button class="primary full" type="button" onclick="saveFixedCategory()">💾 Сохранить группу</button>
-      <div id="fixedCategoryHint" class="settings-note compact">Автоматическая фиксация отключена.</div>
-    </div>
-
-    <div class="settings-section">
-      <h3>🖼 Фоновое изображение</h3>
-      <div id="backgroundPreview" class="background-preview"><span>Фон не установлен</span></div>
-      <div class="background-source-row">
-        <label class="file-button">🖼 Выбрать файл
-          <input id="backgroundFile" type="file" accept=".png,.jpg,.jpeg,.webp,.gif,image/png,image/jpeg,image/webp,image/gif" onchange="uploadBackgroundFile(event)">
+    <section class="settings-group active" data-settings-panel="general">
+      <div class="settings-section">
+        <h3>🎨 Тема</h3>
+        <label>Оформление
+          <select id="themeSelect">
+            <option value="dark">🌙 Тёмная</option>
+            <option value="light">☀️ Светлая</option>
+          </select>
         </label>
-        <button type="button" onclick="removeBackgroundImage()">🗑 Удалить фон</button>
+        <div class="settings-note compact">Тема сохраняется в браузере и включается автоматически при следующем открытии Dashboard.</div>
       </div>
-      <div class="background-url-row">
-        <input id="backgroundUrl" maxlength="2048" placeholder="URL изображения: https://site.com/background.jpg">
-        <button type="button" onclick="importBackgroundFromUrl()">🌐 Загрузить URL</button>
+      <div class="settings-section">
+        <h3>🗂 Управление категориями</h3>
+        <div class="settings-note compact">Здесь находятся операции с категориями. Основная панель остаётся компактной.</div>
+        <div class="category-settings-actions">
+          <button type="button" onclick="openCategoryModal()">＋ Создать категорию</button>
+          <button type="button" onclick="editSelectedCategory()">✎ Изменить выбранную</button>
+          <button type="button" onclick="deleteSelectedCategory()">🗑 Удалить выбранную</button>
+        </div>
       </div>
-      <button class="primary full" type="button" onclick="saveBackgroundSettings()">💾 Сохранить фон</button>
-      <div class="settings-note compact">Изображение сохраняется локально в Dashboard. При экспорте настроек фон, локальные иконки и изображения плиток включаются в JSON-файл.</div>
-    </div>
+      <div class="settings-section">
+        <h3>📌 Фиксация стартовой группы</h3>
+        <label>Группа при открытии Dashboard
+          <select id="fixedCategory"></select>
+        </label>
+        <button class="primary full" type="button" onclick="saveFixedCategory()">💾 Сохранить группу</button>
+        <div id="fixedCategoryHint" class="settings-note compact">Автоматическая фиксация отключена.</div>
+      </div>
+    </section>
 
+    <section class="settings-group" data-settings-panel="appearance">
+      <div class="settings-section">
+        <h3>🖼 Фоновое изображение</h3>
+        <div id="backgroundPreview" class="background-preview"><span>Фон не установлен</span></div>
+        <div class="background-source-row">
+          <label class="file-button">🖼 Выбрать файл
+            <input id="backgroundFile" type="file" accept=".png,.jpg,.jpeg,.webp,.gif,image/png,image/jpeg,image/webp,image/gif" onchange="uploadBackgroundFile(event)">
+          </label>
+          <button type="button" onclick="removeBackgroundImage()">🗑 Удалить фон</button>
+        </div>
+        <div class="background-url-row">
+          <input id="backgroundUrl" maxlength="2048" placeholder="URL изображения: https://site.com/background.jpg">
+          <button type="button" onclick="importBackgroundFromUrl()">🌐 Загрузить URL</button>
+        </div>
+        <button class="primary full" type="button" onclick="saveBackgroundSettings()">💾 Сохранить фон</button>
+        <div class="settings-note compact">Изображение сохраняется локально в Dashboard. При экспорте фон, локальные иконки и изображения плиток включаются в JSON.</div>
+      </div>
+      <div class="settings-section">
+        <h3>✨ Внешний вид панели</h3>
+        <label>Прозрачность плиток <span id="cardOpacityValue">90%</span>
+          <input id="cardOpacity" class="range-input" type="range" min="45" max="100" value="90" oninput="previewAppearanceControl('cardOpacity',this.value)">
+        </label>
+        <label>Размытие плиток <span id="cardBlurValue">6 px</span>
+          <input id="cardBlur" class="range-input" type="range" min="0" max="20" value="6" oninput="previewAppearanceControl('cardBlur',this.value)">
+        </label>
+        <label>Размытие фона <span id="backgroundBlurValue">2 px</span>
+          <input id="backgroundBlur" class="range-input" type="range" min="0" max="12" value="2" oninput="previewAppearanceControl('backgroundBlur',this.value)">
+        </label>
+        <label>Затемнение фона <span id="backgroundDimValue">55%</span>
+          <input id="backgroundDim" class="range-input" type="range" min="0" max="85" value="55" oninput="previewAppearanceControl('backgroundDim',this.value)">
+        </label>
+        <button class="primary full" type="button" onclick="saveAppearanceSettings()">💾 Сохранить внешний вид</button>
+        <div class="settings-note compact">Параметры применяются сразу и сохраняются отдельно от самого изображения.</div>
+      </div>
+    </section>
 
-    <div class="settings-section">
-      <h3>✨ Внешний вид панели</h3>
-      <label>Прозрачность плиток <span id="cardOpacityValue">90%</span>
-        <input id="cardOpacity" class="range-input" type="range" min="45" max="100" value="90" oninput="previewAppearanceControl('cardOpacity',this.value)">
-      </label>
-      <label>Размытие плиток <span id="cardBlurValue">6 px</span>
-        <input id="cardBlur" class="range-input" type="range" min="0" max="20" value="6" oninput="previewAppearanceControl('cardBlur',this.value)">
-      </label>
-      <label>Размытие фона <span id="backgroundBlurValue">2 px</span>
-        <input id="backgroundBlur" class="range-input" type="range" min="0" max="12" value="2" oninput="previewAppearanceControl('backgroundBlur',this.value)">
-      </label>
-      <label>Затемнение фона <span id="backgroundDimValue">55%</span>
-        <input id="backgroundDim" class="range-input" type="range" min="0" max="85" value="55" oninput="previewAppearanceControl('backgroundDim',this.value)">
-      </label>
-      <button class="primary full" type="button" onclick="saveAppearanceSettings()">💾 Сохранить внешний вид</button>
-      <div class="settings-note compact">Параметры применяются сразу и сохраняются отдельно от самого изображения.</div>
-    </div>
+    <section class="settings-group" data-settings-panel="data">
+      <div class="settings-section">
+        <h3>💾 Резервная копия и перенос</h3>
+        <p class="settings-note compact">Полный экспорт сохраняет приложения, категории, группы, порядок, оформление плиток, фон, локальные иконки и изображения плиток.</p>
+        <div class="settings-actions">
+          <button class="primary" type="button" onclick="exportSettings()">💾 Экспортировать настройки</button>
+          <label class="file-button">📥 Импортировать настройки
+            <input id="settingsFile" type="file" accept="application/json,.json" onchange="importSettingsFile(event)">
+          </label>
+        </div>
+        <div class="settings-note compact">API-ключ Emby намеренно не экспортируется.</div>
+      </div>
+    </section>
 
+    <section class="settings-group" data-settings-panel="integrations">
+      <div class="settings-section">
+        <h3>📺 Emby</h3>
+        <label>Название
+          <input id="embyName" maxlength="100" placeholder="Emby">
+        </label>
+        <label>URL сервера
+          <input id="embyUrl" maxlength="500" placeholder="http://192.168.1.100:8096">
+        </label>
+        <label>API ключ
+          <input id="embyApiKey" type="password" maxlength="500" placeholder="X-Emby-Token">
+        </label>
+        <label class="check">
+          <input id="embyEnabled" type="checkbox" checked>
+          <span>Показывать статус Emby на панели</span>
+        </label>
+        <div id="embyKeyHint" class="settings-note compact">API ключ нужен для получения статуса сервера.</div>
+        <div class="emby-setting-actions"><button type="button" onclick="testEmbyConnection()">🔎 Проверить подключение</button><button class="primary" type="button" onclick="saveEmbyConfig()">💾 Сохранить настройки Emby</button></div>
+        <div id="embyTestResult" class="settings-note compact"></div>
+      </div>
+    </section>
 
-    <div class="settings-section">
-      <h3>🔎 Локальные сервисы в сети</h3>
-      <div class="settings-note compact">Однократный поиск распространённых веб-сервисов по всем адресам указанной приватной IPv4-сети. Ничего автоматически не добавляется и постоянного мониторинга нет.</div>
-      <label>Сеть для сканирования
-        <input id="localServicesNetwork" maxlength="18" inputmode="text" placeholder="192.168.1.0/24">
-      </label>
-      <div class="settings-note compact">Dashboard подставит сеть автоматически, если открыт по локальному IPv4-адресу. Например, для <code>192.168.1.115</code> будет предложено <code>192.168.1.0/24</code>.</div>
-      <button id="discoverLocalServicesButton" class="primary full" type="button" onclick="discoverLocalServices()">🔎 Сканировать локальную сеть</button>
-      <div id="localServicesStatus" class="settings-note compact"></div>
-      <div id="localServicesResults" class="local-services-results"></div>
-    </div>
+    <section class="settings-group" data-settings-panel="network">
+      <div class="settings-section">
+        <h3>🔎 Локальные сервисы в сети</h3>
+        <div class="settings-note compact">Однократный поиск распространённых веб-сервисов по всем адресам указанной приватной IPv4-сети. Ничего автоматически не добавляется и постоянного мониторинга нет.</div>
+        <label>Сеть для сканирования
+          <input id="localServicesNetwork" maxlength="18" inputmode="text" placeholder="192.168.1.0/24">
+        </label>
+        <div class="settings-note compact">Dashboard подставит сеть автоматически, если открыт по локальному IPv4-адресу. Например, для <code>192.168.1.115</code> будет предложено <code>192.168.1.0/24</code>.</div>
+        <button id="discoverLocalServicesButton" class="primary full" type="button" onclick="discoverLocalServices()">🔎 Сканировать локальную сеть</button>
+        <div id="localServicesStatus" class="settings-note compact"></div>
+        <div id="localServicesResults" class="local-services-results"></div>
+      </div>
+    </section>
 
-    <div class="settings-section">
-      <h3>📺 Emby</h3>
-      <label>Название
-        <input id="embyName" maxlength="100" placeholder="Emby">
-      </label>
-      <label>URL сервера
-        <input id="embyUrl" maxlength="500" placeholder="http://192.168.1.100:8096">
-      </label>
-      <label>API ключ
-        <input id="embyApiKey" type="password" maxlength="500" placeholder="X-Emby-Token">
-      </label>
-      <label class="check">
-        <input id="embyEnabled" type="checkbox" checked>
-        <span>Показывать статус Emby на панели</span>
-      </label>
-      <div id="embyKeyHint" class="settings-note compact">API ключ нужен для получения статуса сервера.</div>
-      <div class="emby-setting-actions"><button type="button" onclick="testEmbyConnection()">🔎 Проверить подключение</button><button class="primary" type="button" onclick="saveEmbyConfig()">💾 Сохранить настройки Emby</button></div>
-      <div id="embyTestResult" class="settings-note compact"></div>
-    </div>
-
-    <div class="settings-warning">⚠ Импорт заменит текущие приложения и категории данными из файла. API ключ Emby намеренно не экспортируется.</div>
+    <div class="settings-warning">⚠ Импорт заменит текущие приложения, категории и группы данными из файла. API ключ Emby намеренно не экспортируется.</div>
   </div>
 </div>
 
@@ -392,6 +415,18 @@
   </div>
 </div>
 
+<div id="groupManagerModal" class="modal hidden">
+  <div class="modal-card group-manager-card">
+    <button class="close" onclick="closeGroupManager()">×</button>
+    <h2>📁 Группы</h2>
+    <div id="groupManagerCategory" class="settings-note compact"></div>
+    <div class="group-manager-actions">
+      <button class="primary" type="button" onclick="openGroupModal()">＋ Создать группу</button>
+    </div>
+    <div id="groupManagerList" class="group-manager-list"></div>
+  </div>
+</div>
+
 <div id="embeddedAppModal" class="embedded-app-modal hidden" role="dialog" aria-modal="true" aria-label="Встроенное приложение">
   <div class="embedded-app-shell">
     <header class="embedded-app-header">
@@ -415,7 +450,7 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=53"></script>
+<script src="/static/app.js?v=54"></script>
 
 </body>
 </html>

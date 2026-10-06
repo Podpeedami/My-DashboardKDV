@@ -1005,6 +1005,65 @@ function fillGroupSelect(preferredId=null){
   if(list.some(g=>g.id===current))select.value=String(current);else select.value='';
 }
 
+function openGroupManager(){
+  if(typeof selectedCategory!=='number'){alert('Сначала выберите категорию');return}
+  const modal=document.getElementById('groupManagerModal');
+  if(!modal)return;
+  modal.classList.remove('hidden');
+  renderGroupManager();
+}
+
+function closeGroupManager(){document.getElementById('groupManagerModal')?.classList.add('hidden')}
+
+function renderGroupManager(){
+  const list=document.getElementById('groupManagerList');
+  const label=document.getElementById('groupManagerCategory');
+  if(typeof selectedCategory!=='number'){
+    if(label)label.textContent='Выберите категорию на главной странице.';
+    if(list)list.innerHTML='';
+    return;
+  }
+  const category=categories.find(c=>c.id===selectedCategory);
+  const visible=groups.filter(g=>g.category_id===selectedCategory).sort((a,b)=>(a.sort_order-b.sort_order)||(a.id-b.id));
+  if(label)label.textContent=`Категория: ${category?.name||''}`;
+  if(!list)return;
+  if(!visible.length){
+    list.innerHTML='<div class="group-manager-empty">В этой категории пока нет групп.</div>';
+    return;
+  }
+  list.innerHTML=visible.map(g=>{
+    const count=apps.filter(a=>a.group_id===g.id).length;
+    const active=selectedGroup===g.id?' active':'';
+    return `<div class="group-manager-item${active}">
+      <button type="button" class="group-manager-select" onclick="selectGroupFromManager(${g.id})">${iconHtml(g.icon,'group-icon')}<span>${escapeHtml(g.name)}</span><span class="count">${count}</span></button>
+      <div class="group-manager-item-actions">
+        <button type="button" title="Изменить" onclick="editGroupFromManager(${g.id})">✎</button>
+        <button type="button" title="Удалить" onclick="deleteGroupFromManager(${g.id})">🗑</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function selectGroupFromManager(id){
+  selectGroup(id);
+  renderGroupManager();
+}
+
+function editGroupFromManager(id){
+  const g=groups.find(x=>x.id===id);
+  if(g)openGroupModal(g);
+}
+
+async function deleteGroupFromManager(id){
+  const g=groups.find(x=>x.id===id);
+  if(!g||!confirm(`Удалить группу «${g.name}»? Приложения останутся в категории без группы.`))return;
+  const r=await fetch(`/api/groups/${g.id}`,{method:'DELETE'});
+  if(!r.ok){alert((await r.json()).detail||'Ошибка удаления группы');return}
+  if(selectedGroup===g.id)selectedGroup='all';
+  await loadData();
+  if(document.getElementById('groupManagerModal') && !document.getElementById('groupManagerModal').classList.contains('hidden'))renderGroupManager();
+}
+
 function openGroupModal(g=null){
   if(typeof selectedCategory!=='number'){alert('Сначала выберите категорию');return}
   document.getElementById('groupModal').classList.remove('hidden');
@@ -1025,7 +1084,9 @@ async function saveGroup(e){
   if(!r.ok){alert((await r.json()).detail||'Ошибка сохранения группы');return}
   closeGroupModal();
   await loadData();
-  if(data?.id) { selectedGroup=Number(data.id); renderGroupBar(); renderApps(); }
+  renderGroupBar();
+  renderApps();
+  if(document.getElementById('groupManagerModal') && !document.getElementById('groupManagerModal').classList.contains('hidden')) renderGroupManager();
 }
 function editSelectedGroup(){if(typeof selectedCategory!=='number'||selectedGroup==='all'){alert('Сначала выберите группу');return}const g=groups.find(x=>x.id===selectedGroup);if(g)openGroupModal(g)}
 async function deleteSelectedGroup(){if(typeof selectedCategory!=='number'||selectedGroup==='all'){alert('Сначала выберите группу');return}const g=groups.find(x=>x.id===selectedGroup);if(!g||!confirm(`Удалить группу «${g.name}»? Приложения останутся в категории без группы.`))return;const r=await fetch(`/api/groups/${g.id}`,{method:'DELETE'});if(!r.ok){alert((await r.json()).detail||'Ошибка удаления группы');return}selectedGroup='all';await loadData();}
@@ -1227,7 +1288,19 @@ async function saveFixedCategory(){
   }catch(e){alert(e.message)}
 }
 
-function openSettingsModal(){const modal=document.getElementById('settingsModal');if(modal)modal.classList.remove('hidden');applyTheme(currentTheme,false);populateFixedCategorySelect();const hint=document.getElementById('fixedCategoryHint');if(hint)hint.textContent=fixedCategory?'При открытии Dashboard будет автоматически показана выбранная группа.':'Автоматическая фиксация отключена.';syncAppearanceControls();loadEmbyConfig();loadBackgroundConfig();loadAppearanceConfig();guessLocalDiscoveryNetwork()}
+function switchSettingsGroup(group){
+  const allowed=['general','appearance','data','integrations','network'];
+  const active=allowed.includes(group)?group:'general';
+  localStorage.setItem('mdkdv-settings-group',active);
+  document.querySelectorAll('[data-settings-group]').forEach(btn=>btn.classList.toggle('active',btn.dataset.settingsGroup===active));
+  document.querySelectorAll('[data-settings-panel]').forEach(panel=>panel.classList.toggle('active',panel.dataset.settingsPanel===active));
+}
+
+function restoreSettingsGroup(){
+  switchSettingsGroup(localStorage.getItem('mdkdv-settings-group')||'general');
+}
+
+function openSettingsModal(){const modal=document.getElementById('settingsModal');if(modal)modal.classList.remove('hidden');restoreSettingsGroup();applyTheme(currentTheme,false);populateFixedCategorySelect();const hint=document.getElementById('fixedCategoryHint');if(hint)hint.textContent=fixedCategory?'При открытии Dashboard будет автоматически показана выбранная группа.':'Автоматическая фиксация отключена.';syncAppearanceControls();loadEmbyConfig();loadBackgroundConfig();loadAppearanceConfig();guessLocalDiscoveryNetwork()}
 function closeSettingsModal(){const modal=document.getElementById('settingsModal');if(modal)modal.classList.add('hidden');const file=document.getElementById('settingsFile');if(file)file.value=''}
 
 async function exportSettings(){

@@ -209,6 +209,83 @@ button:hover {
   font-size:12px;
 }
 
+.category-settings-actions, .group-manager-actions {
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+}
+
+.group-manage-button {
+  font-weight:600;
+}
+
+.group-manager-card {
+  width:min(620px,94vw);
+}
+
+.group-manager-list {
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  margin-top:14px;
+}
+
+.group-manager-item {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:6px;
+  background:var(--card-bg);
+}
+
+.group-manager-item.active {
+  border-color:rgba(124,140,255,.7);
+}
+
+.group-manager-select {
+  flex:1;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  min-width:0;
+  background:transparent;
+  border:0;
+  box-shadow:none;
+  color:var(--text);
+  text-align:left;
+}
+
+.group-manager-select span:nth-child(2) {
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+.group-manager-select .count {
+  margin-left:auto;
+  opacity:.55;
+  font-size:11px;
+}
+
+.group-manager-item-actions {
+  display:flex;
+  gap:5px;
+}
+
+.group-manager-item-actions button {
+  min-width:38px;
+  padding:7px 9px;
+}
+
+.group-manager-empty {
+  padding:18px;
+  text-align:center;
+  color:var(--muted);
+  border:1px dashed var(--border);
+  border-radius:12px;
+}
+
 .groups-bar {
   display:flex;
   flex-wrap:wrap;
@@ -843,3 +920,14 @@ body.embedded-open { overflow:hidden; }
 
 .local-services-results{max-height:520px;overflow:auto}
 .local-services-results code{font-size:11px}
+
+
+/* My DashboardKDV 2.13 — grouped panel settings */
+.settings-tabs{display:flex;gap:7px;flex-wrap:wrap;margin:14px 0 16px;padding:6px;border:1px solid var(--line);border-radius:14px;background:rgba(124,140,255,.04)}
+.settings-tab{border:1px solid var(--line);background:var(--panel2);color:var(--muted);padding:8px 11px;border-radius:10px;font-size:12px;font-weight:700;cursor:pointer}
+.settings-tab:hover{color:var(--text);border-color:rgba(124,140,255,.45)}
+.settings-tab.active{color:var(--text);border-color:rgba(124,140,255,.85);background:rgba(124,140,255,.16);box-shadow:0 0 0 1px rgba(124,140,255,.12)}
+.settings-group{display:none}
+.settings-group.active{display:block}
+.settings-group>.settings-section:first-child{margin-top:0}
+@media(max-width:650px){.settings-tabs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.settings-tab{width:100%}}
