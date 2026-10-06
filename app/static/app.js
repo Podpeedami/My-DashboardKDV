@@ -5,17 +5,6 @@ let backgroundSettings = {enabled:false, url:"", opacity:0.35};
 let appearanceSettings = {card_opacity:0.90, card_blur:6, background_blur:2, background_dim:0.55};
 let currentTheme = localStorage.getItem("mdkdv-theme") === "light" ? "light" : "dark";
 
-async function persistTheme(){
-  try{
-    const r=await fetch('/api/preferences',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({theme:currentTheme})});
-    if(!r.ok)throw new Error(`Ошибка сохранения темы (${r.status})`);
-    return await r.json();
-  }catch(e){
-    console.error('Не удалось сохранить тему:', e);
-    return null;
-  }
-}
-
 
 function applyTheme(theme, persist = true){
   currentTheme = theme === 'light' ? 'light' : 'dark';
@@ -31,6 +20,12 @@ function applyTheme(theme, persist = true){
 }
 
 function toggleTheme(){applyTheme(currentTheme === 'dark' ? 'light' : 'dark');}
+
+async function persistTheme(){
+  try{
+    await fetch('/api/preferences',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({theme:currentTheme})});
+  }catch(e){console.error(e)}
+}
 
 
 function applyAppearance(settings = appearanceSettings, syncControls = false){
@@ -1030,6 +1025,67 @@ async function deleteApp(id){
   await loadData();
 }
 
+
+let discoveredLocalServices=[];
+
+function renderLocalServices(services){
+  const box=document.getElementById('localServicesResults');
+  if(!box)return;
+  discoveredLocalServices=Array.isArray(services)?services:[];
+  if(!discoveredLocalServices.length){
+    box.innerHTML='<div class="local-services-empty">Сервисы не найдены на стандартных веб-портах.</div>';
+    return;
+  }
+  box.innerHTML=discoveredLocalServices.map((service,index)=>`
+    <div class="local-service-item">
+      <div class="local-service-main">
+        <span class="local-service-icon">${escapeHtml(service.icon||'🌐')}</span>
+        <div>
+          <strong>${escapeHtml(service.name||'Локальный сервис')}</strong>
+          <span>${escapeHtml(service.url||'')} · порт ${Number(service.port)||''}</span>
+          ${service.description?`<small>${escapeHtml(service.description)}</small>`:''}
+        </div>
+      </div>
+      <button type="button" onclick="addDiscoveredLocalService(${index})">＋ Добавить</button>
+    </div>`).join('');
+}
+
+async function discoverLocalServices(){
+  const box=document.getElementById('localServicesResults');
+  const status=document.getElementById('localServicesStatus');
+  const button=document.getElementById('discoverLocalServicesButton');
+  if(button)button.disabled=true;
+  if(status)status.textContent='Ищем локальные веб-сервисы…';
+  if(box)box.innerHTML='<div class="local-services-empty">Сканирование стандартных веб-портов…</div>';
+  try{
+    const r=await fetch('/api/local-services/discover',{cache:'no-store'});
+    const data=await r.json();
+    if(!r.ok)throw new Error(data.detail||'Не удалось выполнить поиск');
+    renderLocalServices(data.services);
+    if(status)status.textContent=`Найдено: ${Number(data.count)||0}. Сканирование однократное и ничего не сохраняет автоматически.`;
+  }catch(e){
+    if(box)box.innerHTML='<div class="local-services-empty">Ошибка поиска локальных сервисов.</div>';
+    if(status)status.textContent=e.message;
+  }finally{if(button)button.disabled=false}
+}
+
+function addDiscoveredLocalService(index){
+  const service=discoveredLocalServices[index];
+  if(!service)return;
+  openAppModal({
+    name:service.name||'Локальный сервис',
+    url:service.url||'',
+    description:service.description||`Локальный сервис, порт ${service.port}`,
+    icon:service.icon||'🌐',
+    favorite:false,
+    open_mode:'external',
+    size:'medium',
+    tile_bg_mode:'default',tile_bg_value:'',tile_bg_scale:100,tile_opacity:.90,tile_blur:6,
+    tile_icon_size:48,tile_title_size:17,tile_title_color:'#ffffff',tile_description_color:'#cbd5e1',tile_url_color:'#94a3b8',
+    tile_show_description:true,tile_show_url:false
+  });
+}
+
 function openSettingsModal(){const modal=document.getElementById('settingsModal');if(modal)modal.classList.remove('hidden');applyTheme(currentTheme,false);syncAppearanceControls();loadEmbyConfig();loadBackgroundConfig();loadAppearanceConfig()}
 function closeSettingsModal(){const modal=document.getElementById('settingsModal');if(modal)modal.classList.add('hidden');const file=document.getElementById('settingsFile');if(file)file.value=''}
 
@@ -1055,6 +1111,7 @@ async function importSettingsFile(event){
     const text=await file.text();
     const data=JSON.parse(text);
     if(!Array.isArray(data.categories)||!Array.isArray(data.apps))throw new Error('Неверный формат файла');
+    if(data.preferences?.theme)applyTheme(data.preferences.theme); else if(data.theme)applyTheme(data.theme);
     if(!confirm('Импортировать настройки? Текущие приложения и категории будут заменены данными из файла.')){event.target.value='';return}
     const r=await fetch('/api/settings/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
     const result=await r.json();

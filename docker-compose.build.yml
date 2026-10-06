@@ -4,6 +4,8 @@ services:
       context: .
     image: my-dashboardkdv:local
     container_name: my-dashboardkdv-dev
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8080:8000"
     volumes:

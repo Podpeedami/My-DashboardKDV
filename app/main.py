@@ -1,4 +1,5 @@
 from pathlib import Path
+import asyncio
 import hashlib
 import json
 import html
@@ -47,6 +48,100 @@ BACKGROUNDS_DIR.mkdir(parents=True, exist_ok=True)
 TILE_BACKGROUNDS_DIR.mkdir(parents=True, exist_ok=True)
 
 APP_TILE_SIZES = {'mini', 'small', 'medium', 'wide', 'tall', 'large', 'xl', 'hero'}
+
+
+# One-shot discovery of common local web services on the host running Dashboard.
+# This is intentionally a manual discovery feature, not continuous status monitoring.
+LOCAL_SERVICE_HOST = "host.docker.internal"
+LOCAL_SERVICE_CANDIDATES = [
+    (80, ("http",), "🌐", "Веб-сервис"),
+    (443, ("https",), "🔒", "HTTPS веб-сервис"),
+    (3000, ("http",), "🌐", "Веб-сервис на порту 3000"),
+    (3001, ("http",), "🌐", "Веб-сервис на порту 3001"),
+    (5000, ("http",), "🌐", "Веб-сервис на порту 5000"),
+    (5001, ("https", "http"), "🌐", "Веб-сервис на порту 5001"),
+    (7000, ("http",), "🌐", "Веб-сервис на порту 7000"),
+    (8000, ("http",), "🌐", "Веб-сервис на порту 8000"),
+    (8080, ("http",), "🌐", "Веб-сервис на порту 8080"),
+    (8081, ("http",), "🌐", "Веб-сервис на порту 8081"),
+    (8096, ("http",), "📺", "Emby / Jellyfin"),
+    (8097, ("http",), "📺", "Медиа-сервис на порту 8097"),
+    (8123, ("http",), "🏠", "Home Assistant"),
+    (8181, ("http",), "🌐", "Веб-сервис на порту 8181"),
+    (8200, ("http",), "🌐", "Веб-сервис на порту 8200"),
+    (8989, ("http",), "📺", "Sonarr"),
+    (9000, ("http",), "🐳", "Portainer"),
+    (9090, ("http",), "📊", "Prometheus"),
+    (32400, ("http",), "🎬", "Plex"),
+    (5055, ("http",), "🎬", "Overseerr"),
+    (6767, ("http",), "🎬", "Bazarr"),
+    (7878, ("http",), "🎬", "Radarr"),
+    (8686, ("http",), "🎵", "Lidarr"),
+    (9696, ("http",), "🧰", "Prowlarr"),
+]
+
+LOCAL_SERVICE_SIGNATURES = (
+    (("mstream", "file explorer", "now playing"), "mStream Music", "🎵", "Локальная музыкальная библиотека"),
+    (("grafana" ,), "Grafana", "📊", "Мониторинг и графики"),
+    (("emby",), "Emby", "📺", "Домашний медиасервер"),
+    (("jellyfin",), "Jellyfin", "📺", "Домашний медиасервер"),
+    (("portainer",), "Portainer", "🐳", "Управление Docker"),
+    (("home assistant",), "Home Assistant", "🏠", "Умный дом"),
+    (("sonarr",), "Sonarr", "📺", "Автоматизация сериалов"),
+    (("radarr",), "Radarr", "🎬", "Автоматизация фильмов"),
+    (("lidarr",), "Lidarr", "🎵", "Автоматизация музыки"),
+    (("prowlarr",), "Prowlarr", "🧰", "Менеджер индексаторов"),
+    (("bazarr",), "Bazarr", "🎬", "Субтитры для медиасерверов"),
+    (("overseerr",), "Overseerr", "🎬", "Запросы медиаконтента"),
+    (("plex",), "Plex", "🎬", "Домашний медиасервер"),
+    (("prometheus",), "Prometheus", "📊", "Сбор метрик"),
+)
+
+
+def _extract_page_title(text: str) -> str:
+    match = re.search(r"<title[^>]*>(.*?)</title>", text or "", flags=re.I | re.S)
+    if not match:
+        return ""
+    value = re.sub(r"\s+", " ", html.unescape(match.group(1))).strip()
+    return value[:160]
+
+
+def _identify_local_service(port: int, title: str, body: str, fallback_name: str, fallback_icon: str, fallback_description: str):
+    haystack = f"{title}\n{body[:50000]}".lower()
+    for needles, name, icon, description in LOCAL_SERVICE_SIGNATURES:
+        if any(needle in haystack for needle in needles):
+            return name, icon, description
+    return fallback_name, fallback_icon, fallback_description
+
+
+async def _probe_local_service(client: httpx.AsyncClient, port: int, schemes: tuple[str, ...], icon: str, fallback_name: str):
+    for scheme in schemes:
+        url = f"{scheme}://{LOCAL_SERVICE_HOST}:{port}/"
+        try:
+            response = await client.get(
+                url,
+                headers={"User-Agent": "My DashboardKDV Local Service Discovery/2.9.0"},
+                follow_redirects=True,
+            )
+            content_type = response.headers.get("content-type", "")
+            body = response.text[:50000] if "text" in content_type.lower() or "html" in content_type.lower() else ""
+            title = _extract_page_title(body)
+            name, detected_icon, description = _identify_local_service(
+                port, title, body, fallback_name, icon, fallback_name
+            )
+            final_url = str(response.url).rstrip("/")
+            return {
+                "port": port,
+                "url": final_url,
+                "name": name,
+                "icon": detected_icon,
+                "description": description,
+                "title": title,
+                "status_code": response.status_code,
+            }
+        except (httpx.HTTPError, ValueError, UnicodeError):
+            continue
+    return None
 MAX_ICON_BYTES = 5 * 1024 * 1024
 MAX_BACKGROUND_BYTES = 8 * 1024 * 1024
 ALLOWED_ICON_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".ico"}
@@ -66,7 +161,7 @@ ALLOWED_ICON_MIME = {
     "image/vnd.microsoft.icon": ".ico",
 }
 
-app = FastAPI(title="My DashboardKDV", version="2.8.0")
+app = FastAPI(title="My DashboardKDV", version="2.9.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/icons", StaticFiles(directory=ICONS_DIR), name="icons")
 app.mount("/backgrounds", StaticFiles(directory=BACKGROUNDS_DIR), name="backgrounds")
@@ -549,6 +644,25 @@ def reorder_categories(payload: ReorderCategories):
             raise HTTPException(400, "Список категорий для сортировки не совпадает с текущим списком")
         conn.executemany("UPDATE categories SET sort_order=? WHERE id=?", [(position, category_id) for position, category_id in enumerate(incoming)])
     return {"ok": True, "count": len(incoming)}
+
+
+
+@app.get("/api/local-services/discover")
+async def discover_local_services():
+    """Find common HTTP services listening on the Docker host.
+
+    The endpoint performs a one-shot scan of a small curated list of web ports.
+    It does not save anything and does not run periodically.
+    """
+    async with httpx.AsyncClient(timeout=httpx.Timeout(1.8, connect=0.7), verify=False) as client:
+        tasks = [
+            _probe_local_service(client, port, schemes, icon, fallback_name)
+            for port, schemes, icon, fallback_name in LOCAL_SERVICE_CANDIDATES
+        ]
+        results = await asyncio.gather(*tasks)
+    services = [item for item in results if item]
+    services.sort(key=lambda item: (item["port"], item["name"].lower()))
+    return {"host": LOCAL_SERVICE_HOST, "services": services, "count": len(services)}
 
 
 @app.get("/api/apps")

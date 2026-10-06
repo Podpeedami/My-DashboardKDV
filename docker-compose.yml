@@ -2,6 +2,8 @@ services:
   dashboard:
     image: ghcr.io/podpeedami/my-dashboardkdv:latest
     container_name: my-dashboardkdv
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8080:8000"
     volumes:

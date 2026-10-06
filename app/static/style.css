@@ -802,3 +802,11 @@ body.embedded-open { overflow:hidden; }
   .embedded-app-actions button, .embedded-app-actions .button-link { flex:1 1 auto; }
   .embedded-app-title-wrap { width:100%; }
 }
+
+
+.local-services-results{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.local-service-item{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--panel2)}
+.local-service-main{display:flex;align-items:center;gap:10px;min-width:0}.local-service-icon{font-size:20px;flex:0 0 auto}
+.local-service-main div{display:flex;flex-direction:column;gap:2px;min-width:0}.local-service-main strong{font-size:13px}.local-service-main span,.local-service-main small{color:var(--muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.local-service-main small{font-size:12px}
+.local-service-item button{flex:0 0 auto}.local-services-empty{padding:10px 12px;border:1px dashed var(--line);border-radius:12px;color:var(--muted);font-size:12px;text-align:center}
+@media(max-width:620px){.local-service-item{align-items:stretch;flex-direction:column}.local-service-item button{width:100%}}
