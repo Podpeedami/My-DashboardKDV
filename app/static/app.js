@@ -16,7 +16,7 @@ function applyTheme(theme, persist = true){
   }
   const select = document.getElementById('themeSelect');
   if(select) select.value = currentTheme;
-  if(persist) localStorage.setItem('mdkdv-theme', currentTheme);
+  if(persist){ localStorage.setItem('mdkdv-theme', currentTheme); persistTheme(); }
 }
 
 function toggleTheme(){applyTheme(currentTheme === 'dark' ? 'light' : 'dark');}
@@ -264,6 +264,19 @@ async function saveEmbyConfig(){
     if(hint)hint.textContent='Настройки сохранены. API ключ хранится на сервере Dashboard и не экспортируется.';
     await loadEmbyStatus();
   }catch(e){alert(e.message)}
+}
+
+async function loadPreferences(){
+  try{
+    const r=await fetch('/api/preferences',{cache:'no-store'});
+    if(!r.ok)return;
+    const data=await r.json();
+    if(data?.theme==='light'||data?.theme==='dark'){
+      currentTheme=data.theme;
+      localStorage.setItem('mdkdv-theme', currentTheme);
+      applyTheme(currentTheme,false);
+    }
+  }catch(e){console.error(e)}
 }
 
 async function loadData(){
@@ -1031,12 +1044,13 @@ async function importSettingsFile(event){
     const text=await file.text();
     const data=JSON.parse(text);
     if(!Array.isArray(data.categories)||!Array.isArray(data.apps))throw new Error('Неверный формат файла');
-    if(data.theme)applyTheme(data.theme);
+    if(data.preferences?.theme)applyTheme(data.preferences.theme); else if(data.theme)applyTheme(data.theme);
     if(!confirm('Импортировать настройки? Текущие приложения и категории будут заменены данными из файла.')){event.target.value='';return}
     const r=await fetch('/api/settings/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
     const result=await r.json();
     if(!r.ok)throw new Error(result.detail||'Ошибка импорта');
     selectedCategory='all';
+    if(data.preferences?.theme==='light'||data.preferences?.theme==='dark'){ currentTheme=data.preferences.theme; localStorage.setItem('mdkdv-theme',currentTheme); applyTheme(currentTheme,false); }
     closeSettingsModal();
     await loadData();
     await loadBackgroundConfig();
@@ -1056,6 +1070,7 @@ document.addEventListener('DOMContentLoaded',()=>{
     searchField.addEventListener('paste',()=>setTimeout(renderApps,0));
   }
   applyTheme(currentTheme,false);
+  loadPreferences();
   const settingsButton=document.getElementById('settingsButton');
   if(settingsButton)settingsButton.addEventListener('click',openSettingsModal);
   const settingsModal=document.getElementById('settingsModal');

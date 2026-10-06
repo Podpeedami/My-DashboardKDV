@@ -17,6 +17,7 @@ from html.parser import HTMLParser
 from typing import Literal
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+import base64
 from time import perf_counter
 from urllib.parse import urlsplit, urlunsplit
 
@@ -65,7 +66,7 @@ ALLOWED_ICON_MIME = {
     "image/vnd.microsoft.icon": ".ico",
 }
 
-app = FastAPI(title="My DashboardKDV", version="2.7.4")
+app = FastAPI(title="My DashboardKDV", version="2.8.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/icons", StaticFiles(directory=ICONS_DIR), name="icons")
 app.mount("/backgrounds", StaticFiles(directory=BACKGROUNDS_DIR), name="backgrounds")
@@ -310,6 +311,8 @@ class DashboardSettings(BaseModel):
     emby: dict = Field(default_factory=dict)
     background: dict = Field(default_factory=dict)
     appearance: dict = Field(default_factory=dict)
+    assets: list[dict] = Field(default_factory=list)
+    preferences: dict = Field(default_factory=dict)
 
 
 class EmbyConfig(BaseModel):
@@ -431,6 +434,15 @@ def init_db():
             status_checks_enabled INTEGER NOT NULL DEFAULT 1
             )"""
         )
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS dashboard_preferences (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            theme TEXT NOT NULL DEFAULT 'dark'
+            )"""
+        )
+        if conn.execute("SELECT 1 FROM dashboard_preferences WHERE id=1").fetchone() is None:
+            conn.execute("INSERT INTO dashboard_preferences(id,theme) VALUES(1,'dark')")
+        conn.execute("UPDATE dashboard_preferences SET theme='dark' WHERE theme NOT IN ('dark','light') OR theme IS NULL")
         appearance_columns = {row['name'] for row in conn.execute("PRAGMA table_info(appearance_settings)").fetchall()}
         if 'status_checks_enabled' not in appearance_columns:
             conn.execute("ALTER TABLE appearance_settings ADD COLUMN status_checks_enabled INTEGER NOT NULL DEFAULT 1")
@@ -577,7 +589,7 @@ def create_app(item: AppItem):
         cur = conn.execute(
             """INSERT INTO apps(name,url,description,category_id,icon,favorite,open_mode,size,status_enabled,sort_order,
             tile_bg_mode,tile_bg_value,tile_bg_scale,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_title_color,tile_description_color,tile_url_color,tile_show_description,tile_show_url)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (item.name.strip(), item.url.strip(), item.description.strip(), item.category_id, item.icon.strip() or "🚀", int(item.favorite), item.open_mode,
              item.size, int(item.status_enabled), int(next_order), item.tile_bg_mode, item.tile_bg_value.strip(), item.tile_bg_scale, item.tile_opacity,
              item.tile_blur, item.tile_icon_size, item.tile_title_size, item.tile_title_color, item.tile_description_color, item.tile_url_color, int(item.tile_show_description), int(item.tile_show_url)),
@@ -618,7 +630,7 @@ def duplicate_app(app_id: int):
         cur = conn.execute(
             """INSERT INTO apps(name,url,description,category_id,icon,favorite,open_mode,size,status_enabled,sort_order,
             tile_bg_mode,tile_bg_value,tile_bg_scale,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_title_color,tile_description_color,tile_url_color,tile_show_description,tile_show_url)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (f"{row['name']} (копия)", row["url"], row["description"], row["category_id"], row["icon"], row["favorite"], row["open_mode"], row["size"], row["status_enabled"], int(next_order),
              row["tile_bg_mode"], row["tile_bg_value"], row["tile_bg_scale"], row["tile_opacity"], row["tile_blur"], row["tile_icon_size"], row["tile_title_size"], row["tile_title_color"], row["tile_description_color"], row["tile_url_color"], row["tile_show_description"], row["tile_show_url"]),
         )
@@ -1259,6 +1271,113 @@ def test_emby_connection(payload: dict):
         }
 
 
+@app.get("/api/preferences")
+def get_preferences():
+    with db() as conn:
+        row = conn.execute("SELECT theme FROM dashboard_preferences WHERE id=1").fetchone()
+    return {"theme": row["theme"] if row else "dark"}
+
+
+@app.put("/api/preferences")
+def update_preferences(payload: dict):
+    theme = "light" if str(payload.get("theme", "dark")).lower() == "light" else "dark"
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO dashboard_preferences(id,theme) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET theme=excluded.theme",
+            (theme,),
+        )
+    return {"theme": theme}
+
+
+def _read_local_asset(path_value: str) -> tuple[str, Path] | None:
+    value = str(path_value or "").strip()
+    if value.startswith("/icons/"):
+        name = Path(value.removeprefix("/icons/")).name
+        path = ICONS_DIR / name
+        kind = "icon"
+    elif value.startswith("/backgrounds/"):
+        name = Path(value.removeprefix("/backgrounds/")).name
+        path = BACKGROUNDS_DIR / name
+        kind = "background"
+    elif value.startswith("/api/tile-background/"):
+        name = Path(value.removeprefix("/api/tile-background/")).name
+        path = TILE_BACKGROUNDS_DIR / name
+        kind = "tile-background"
+    elif value.startswith("/tile-backgrounds/"):
+        name = Path(value.removeprefix("/tile-backgrounds/")).name
+        path = TILE_BACKGROUNDS_DIR / name
+        kind = "tile-background"
+    else:
+        return None
+    if not name or not path.exists() or not path.is_file():
+        return None
+    return kind, path
+
+
+def _asset_entry(path_value: str) -> dict | None:
+    item = _read_local_asset(path_value)
+    if not item:
+        return None
+    kind, path = item
+    size_limit = MAX_ICON_BYTES if kind == "icon" else MAX_BACKGROUND_BYTES
+    data = path.read_bytes()
+    if len(data) > size_limit:
+        return None
+    mime = mimetypes.guess_type(path.name)[0] or ("image/x-icon" if path.suffix.lower() == ".ico" else "application/octet-stream")
+    return {
+        "path": path_value,
+        "kind": kind,
+        "name": path.name,
+        "mime": mime,
+        "data": "data:%s;base64,%s" % (mime, base64.b64encode(data).decode("ascii")),
+    }
+
+
+def _restore_assets(assets: list[dict]) -> dict[str, str]:
+    path_map: dict[str, str] = {}
+    total = 0
+    for asset in assets or []:
+        if not isinstance(asset, dict):
+            continue
+        old_path = str(asset.get("path") or "").strip()
+        kind = str(asset.get("kind") or "")
+        data_url = str(asset.get("data") or "")
+        if kind not in {"icon", "background", "tile-background"} or not old_path or not data_url.startswith("data:") or ";base64," not in data_url:
+            continue
+        try:
+            header, encoded = data_url.split(",", 1)
+            mime = header[5:].split(";", 1)[0].lower()
+            raw = base64.b64decode(encoded, validate=True)
+        except Exception:
+            continue
+        limit = MAX_ICON_BYTES if kind == "icon" else MAX_BACKGROUND_BYTES
+        total += len(raw)
+        if len(raw) > limit or total > 100 * 1024 * 1024:
+            raise ValueError("Суммарный объём изображений в импорте не должен превышать 100 МБ")
+        name = Path(str(asset.get("name") or "")).name
+        if not name:
+            continue
+        ext = Path(name).suffix.lower()
+        allowed = ALLOWED_ICON_EXTENSIONS if kind == "icon" else ALLOWED_BACKGROUND_EXTENSIONS
+        if ext not in allowed:
+            ext = _safe_background_extension(name, mime) if kind != "icon" else _safe_extension(name, mime)
+        if not ext or ext not in allowed:
+            continue
+        safe_name = f"{uuid.uuid4().hex}{ext}"
+        if kind == "icon":
+            target = ICONS_DIR / safe_name
+            new_path = f"/icons/{safe_name}"
+        elif kind == "background":
+            target = BACKGROUNDS_DIR / safe_name
+            new_path = f"/backgrounds/{safe_name}"
+        else:
+            target = TILE_BACKGROUNDS_DIR / safe_name
+            new_path = f"/api/tile-background/{safe_name}"
+        target.write_bytes(raw)
+        path_map[old_path] = new_path
+    return path_map
+
+
 @app.get("/api/settings/export")
 def export_settings(theme: str = "dark"):
     from datetime import datetime, timezone
@@ -1274,29 +1393,51 @@ def export_settings(theme: str = "dark"):
 
     background = _background_settings()
     background_export = {"enabled": background.get("enabled", False), "url": "", "opacity": 1.0}
-    bg_file = _background_file_for_export()
-    if background.get("enabled") and bg_file:
-        mime = mimetypes.guess_type(bg_file.name)[0] or "image/jpeg"
-        background_export["mime"] = mime
-        background_export["data"] = "data:%s;base64,%s" % (mime, base64.b64encode(bg_file.read_bytes()).decode("ascii"))
+    assets: dict[str, dict] = {}
+
+    def add_asset(value: str):
+        entry = _asset_entry(value)
+        if entry:
+            assets.setdefault(entry["path"], entry)
+
+    for item in categories:
+        add_asset(str(item.get("icon") or ""))
+    for item in apps:
+        add_asset(str(item.get("icon") or ""))
+        add_asset(str(item.get("tile_bg_value") or ""))
+
+    bg_path = str(background.get("url") or "")
+    add_asset(bg_path)
+    bg_entry = assets.get(bg_path)
+    if background.get("enabled") and bg_entry:
+        background_export["asset_path"] = bg_entry["path"]
+
+    with db() as conn:
+        pref_row = conn.execute("SELECT theme FROM dashboard_preferences WHERE id=1").fetchone()
+    stored_theme = pref_row["theme"] if pref_row else ("light" if theme == "light" else "dark")
 
     return {
-        "version": 7,
+        "version": 8,
         "app_name": "My DashboardKDV",
-        "theme": "light" if theme == "light" else "dark",
+        "theme": "light" if stored_theme == "light" else "dark",
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "categories": categories,
         "apps": apps,
         "emby": get_emby_config(),
         "background": background_export,
         "appearance": _appearance_settings(),
+        "assets": list(assets.values()),
+        "preferences": {"theme": "light" if stored_theme == "light" else "dark"},
     }
 
 
 @app.post("/api/settings/import")
 def import_settings(settings: DashboardSettings):
     old_to_new = {}
+    path_map: dict[str, str] = {}
     try:
+        raw_settings = settings.model_dump() if hasattr(settings, "model_dump") else dict(settings)
+        path_map = _restore_assets(raw_settings.get("assets", []))
         with db() as conn:
             conn.execute("PRAGMA foreign_keys = ON")
             conn.execute("DELETE FROM apps")
@@ -1304,7 +1445,7 @@ def import_settings(settings: DashboardSettings):
             for category in settings.categories:
                 cur = conn.execute(
                     "INSERT INTO categories(name,icon,sort_order) VALUES (?,?,?)",
-                    (category.name.strip(), category.icon.strip() or "📁", int(getattr(category, "sort_order", 0))),
+                    (category.name.strip(), path_map.get(category.icon.strip(), category.icon.strip()) or "📁", int(getattr(category, "sort_order", 0))),
                 )
                 old_to_new[category.id] = cur.lastrowid
             has_explicit_order = any(getattr(app_item, "sort_order", 0) != 0 for app_item in settings.apps)
@@ -1316,20 +1457,20 @@ def import_settings(settings: DashboardSettings):
                 conn.execute(
                     """INSERT INTO apps(name,url,description,category_id,icon,favorite,open_mode,size,status_enabled,sort_order,
                     tile_bg_mode,tile_bg_value,tile_bg_scale,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_title_color,tile_description_color,tile_url_color,tile_show_description,tile_show_url)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         app_item.name.strip(),
                         app_item.url.strip(),
                         app_item.description.strip(),
                         new_category_id,
-                        app_item.icon.strip() or "🚀",
+                        path_map.get(app_item.icon.strip(), app_item.icon.strip()) or "🚀",
                         int(app_item.favorite),
                         app_item.open_mode,
                         app_item.size if app_item.size in APP_TILE_SIZES else "medium",
                         int(app_item.status_enabled),
                         sort_order,
                         app_item.tile_bg_mode,
-                        app_item.tile_bg_value.strip(),
+                        path_map.get(app_item.tile_bg_value.strip(), app_item.tile_bg_value.strip()),
                         app_item.tile_bg_scale,
                         app_item.tile_opacity,
                         app_item.tile_blur,
@@ -1356,10 +1497,9 @@ def import_settings(settings: DashboardSettings):
             background = settings.model_dump().get("background") if hasattr(settings, "model_dump") else None
             if isinstance(background, dict):
                 opacity = 1.0
-                bg_url = ""
+                bg_url = path_map.get(str(background.get("asset_path") or ""), "")
                 bg_data = str(background.get("data", ""))
-                if bg_data.startswith("data:") and ";base64," in bg_data:
-                    import base64
+                if not bg_url and bg_data.startswith("data:") and ";base64," in bg_data:
                     header, encoded = bg_data.split(",", 1)
                     mime = header[5:].split(";", 1)[0].lower()
                     ext = _safe_background_extension("", mime)
@@ -1387,6 +1527,14 @@ def import_settings(settings: DashboardSettings):
                     """INSERT INTO appearance_settings(id,card_opacity,card_blur,background_blur,background_dim,status_checks_enabled) VALUES(1,?,?,?,?,?)
                     ON CONFLICT(id) DO UPDATE SET card_opacity=excluded.card_opacity,card_blur=excluded.card_blur,background_blur=excluded.background_blur,background_dim=excluded.background_dim,status_checks_enabled=excluded.status_checks_enabled""",
                     (card_opacity, card_blur, background_blur, background_dim, int(status_checks_enabled)),
+                )
+
+            preferences = raw_settings.get("preferences") if isinstance(raw_settings, dict) else None
+            if isinstance(preferences, dict):
+                theme = "light" if str(preferences.get("theme", "dark")).lower() == "light" else "dark"
+                conn.execute(
+                    "INSERT INTO dashboard_preferences(id,theme) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET theme=excluded.theme",
+                    (theme,),
                 )
     except sqlite3.IntegrityError as exc:
         raise HTTPException(400, f"Не удалось импортировать настройки: {exc}")
