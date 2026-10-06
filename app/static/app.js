@@ -5,6 +5,17 @@ let backgroundSettings = {enabled:false, url:"", opacity:0.35};
 let appearanceSettings = {card_opacity:0.90, card_blur:6, background_blur:2, background_dim:0.55};
 let currentTheme = localStorage.getItem("mdkdv-theme") === "light" ? "light" : "dark";
 
+async function persistTheme(){
+  try{
+    const r=await fetch('/api/preferences',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({theme:currentTheme})});
+    if(!r.ok)throw new Error(`Ошибка сохранения темы (${r.status})`);
+    return await r.json();
+  }catch(e){
+    console.error('Не удалось сохранить тему:', e);
+    return null;
+  }
+}
+
 
 function applyTheme(theme, persist = true){
   currentTheme = theme === 'light' ? 'light' : 'dark';
@@ -1044,7 +1055,6 @@ async function importSettingsFile(event){
     const text=await file.text();
     const data=JSON.parse(text);
     if(!Array.isArray(data.categories)||!Array.isArray(data.apps))throw new Error('Неверный формат файла');
-    if(data.preferences?.theme)applyTheme(data.preferences.theme); else if(data.theme)applyTheme(data.theme);
     if(!confirm('Импортировать настройки? Текущие приложения и категории будут заменены данными из файла.')){event.target.value='';return}
     const r=await fetch('/api/settings/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
     const result=await r.json();
