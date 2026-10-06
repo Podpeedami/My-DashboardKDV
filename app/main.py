@@ -65,7 +65,7 @@ ALLOWED_ICON_MIME = {
     "image/vnd.microsoft.icon": ".ico",
 }
 
-app = FastAPI(title="My DashboardKDV", version="2.6.4")
+app = FastAPI(title="My DashboardKDV", version="2.7.4")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/icons", StaticFiles(directory=ICONS_DIR), name="icons")
 app.mount("/backgrounds", StaticFiles(directory=BACKGROUNDS_DIR), name="backgrounds")
@@ -252,6 +252,7 @@ class AppItem(BaseModel):
     status_enabled: bool = True
     tile_bg_mode: Literal['default', 'color', 'image'] = 'default'
     tile_bg_value: str = Field(default="", max_length=2048)
+    tile_bg_scale: int = Field(default=100, ge=50, le=200)
     tile_opacity: float = Field(default=0.90, ge=0.45, le=1.0)
     tile_blur: float = Field(default=6.0, ge=0.0, le=20.0)
     tile_icon_size: int = Field(default=48, ge=24, le=96)
@@ -283,6 +284,7 @@ class ExportApp(BaseModel):
     status_enabled: bool = True
     tile_bg_mode: Literal['default', 'color', 'image'] = 'default'
     tile_bg_value: str = Field(default="", max_length=2048)
+    tile_bg_scale: int = Field(default=100, ge=50, le=200)
     tile_opacity: float = Field(default=0.90, ge=0.45, le=1.0)
     tile_blur: float = Field(default=6.0, ge=0.0, le=20.0)
     tile_icon_size: int = Field(default=48, ge=24, le=96)
@@ -364,6 +366,7 @@ def init_db():
         for column_sql in [
             "ALTER TABLE apps ADD COLUMN tile_bg_mode TEXT NOT NULL DEFAULT 'default'",
             "ALTER TABLE apps ADD COLUMN tile_bg_value TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE apps ADD COLUMN tile_bg_scale INTEGER NOT NULL DEFAULT 100",
             "ALTER TABLE apps ADD COLUMN tile_opacity REAL NOT NULL DEFAULT 0.90",
             "ALTER TABLE apps ADD COLUMN tile_blur REAL NOT NULL DEFAULT 6.0",
             "ALTER TABLE apps ADD COLUMN tile_icon_size INTEGER NOT NULL DEFAULT 48",
@@ -387,6 +390,7 @@ def init_db():
         conn.execute("UPDATE apps SET size='medium' WHERE size NOT IN ('mini','small','medium','wide','tall','large','xl','hero') OR size IS NULL")
         conn.execute("UPDATE apps SET tile_bg_mode='default' WHERE tile_bg_mode NOT IN ('default','color','image') OR tile_bg_mode IS NULL")
         conn.execute("UPDATE apps SET tile_bg_value='' WHERE tile_bg_value IS NULL")
+        conn.execute("UPDATE apps SET tile_bg_scale=100 WHERE tile_bg_scale IS NULL OR tile_bg_scale < 50 OR tile_bg_scale > 200")
         conn.execute("UPDATE apps SET tile_opacity=0.90 WHERE tile_opacity IS NULL OR tile_opacity < 0.45 OR tile_opacity > 1.0")
         conn.execute("UPDATE apps SET tile_blur=6.0 WHERE tile_blur IS NULL OR tile_blur < 0 OR tile_blur > 20")
         conn.execute("UPDATE apps SET tile_icon_size=48 WHERE tile_icon_size IS NULL OR tile_icon_size < 24 OR tile_icon_size > 96")
@@ -540,7 +544,7 @@ def list_apps():
     with db() as conn:
         rows = conn.execute(
             """SELECT a.id,a.name,a.url,a.description,a.category_id,a.icon,a.favorite,a.open_mode,a.size,a.status_enabled,a.sort_order,
-            a.tile_bg_mode,a.tile_bg_value,a.tile_opacity,a.tile_blur,a.tile_icon_size,a.tile_title_size,
+            a.tile_bg_mode,a.tile_bg_value,a.tile_bg_scale,a.tile_opacity,a.tile_blur,a.tile_icon_size,a.tile_title_size,
             a.tile_title_color,a.tile_description_color,a.tile_url_color,
             a.tile_show_description,a.tile_show_url,
             c.name AS category_name,c.icon AS category_icon FROM apps a JOIN categories c ON c.id=a.category_id
@@ -572,10 +576,10 @@ def create_app(item: AppItem):
         next_order = conn.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM apps").fetchone()["next_order"]
         cur = conn.execute(
             """INSERT INTO apps(name,url,description,category_id,icon,favorite,open_mode,size,status_enabled,sort_order,
-            tile_bg_mode,tile_bg_value,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_title_color,tile_description_color,tile_url_color,tile_show_description,tile_show_url)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            tile_bg_mode,tile_bg_value,tile_bg_scale,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_title_color,tile_description_color,tile_url_color,tile_show_description,tile_show_url)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (item.name.strip(), item.url.strip(), item.description.strip(), item.category_id, item.icon.strip() or "🚀", int(item.favorite), item.open_mode,
-             item.size, int(item.status_enabled), int(next_order), item.tile_bg_mode, item.tile_bg_value.strip(), item.tile_opacity,
+             item.size, int(item.status_enabled), int(next_order), item.tile_bg_mode, item.tile_bg_value.strip(), item.tile_bg_scale, item.tile_opacity,
              item.tile_blur, item.tile_icon_size, item.tile_title_size, item.tile_title_color, item.tile_description_color, item.tile_url_color, int(item.tile_show_description), int(item.tile_show_url)),
         )
         return {"id": cur.lastrowid, **item.model_dump()}
@@ -588,10 +592,10 @@ def update_app(app_id: int, item: AppItem):
             raise HTTPException(400, "Категория не найдена")
         cur = conn.execute(
             """UPDATE apps SET name=?,url=?,description=?,category_id=?,icon=?,favorite=?,open_mode=?,size=?,status_enabled=?,
-            tile_bg_mode=?,tile_bg_value=?,tile_opacity=?,tile_blur=?,tile_icon_size=?,tile_title_size=?,tile_title_color=?,tile_description_color=?,tile_url_color=?,tile_show_description=?,tile_show_url=?
+            tile_bg_mode=?,tile_bg_value=?,tile_bg_scale=?,tile_opacity=?,tile_blur=?,tile_icon_size=?,tile_title_size=?,tile_title_color=?,tile_description_color=?,tile_url_color=?,tile_show_description=?,tile_show_url=?
             WHERE id=?""",
             (item.name.strip(), item.url.strip(), item.description.strip(), item.category_id, item.icon.strip() or "🚀", int(item.favorite), item.open_mode,
-             item.size, int(item.status_enabled), item.tile_bg_mode, item.tile_bg_value.strip(), item.tile_opacity, item.tile_blur,
+             item.size, int(item.status_enabled), item.tile_bg_mode, item.tile_bg_value.strip(), item.tile_bg_scale, item.tile_opacity, item.tile_blur,
              item.tile_icon_size, item.tile_title_size, item.tile_title_color, item.tile_description_color, item.tile_url_color, int(item.tile_show_description), int(item.tile_show_url), app_id),
         )
         if not cur.rowcount:
@@ -604,7 +608,7 @@ def duplicate_app(app_id: int):
     with db() as conn:
         row = conn.execute(
             """SELECT name,url,description,category_id,icon,favorite,open_mode,size,status_enabled,
-            tile_bg_mode,tile_bg_value,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_title_color,tile_description_color,tile_url_color,tile_show_description,tile_show_url
+            tile_bg_mode,tile_bg_value,tile_bg_scale,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_title_color,tile_description_color,tile_url_color,tile_show_description,tile_show_url
             FROM apps WHERE id=?""",
             (app_id,),
         ).fetchone()
@@ -613,10 +617,10 @@ def duplicate_app(app_id: int):
         next_order = conn.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM apps").fetchone()["next_order"]
         cur = conn.execute(
             """INSERT INTO apps(name,url,description,category_id,icon,favorite,open_mode,size,status_enabled,sort_order,
-            tile_bg_mode,tile_bg_value,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_title_color,tile_description_color,tile_url_color,tile_show_description,tile_show_url)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            tile_bg_mode,tile_bg_value,tile_bg_scale,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_title_color,tile_description_color,tile_url_color,tile_show_description,tile_show_url)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (f"{row['name']} (копия)", row["url"], row["description"], row["category_id"], row["icon"], row["favorite"], row["open_mode"], row["size"], row["status_enabled"], int(next_order),
-             row["tile_bg_mode"], row["tile_bg_value"], row["tile_opacity"], row["tile_blur"], row["tile_icon_size"], row["tile_title_size"], row["tile_title_color"], row["tile_description_color"], row["tile_url_color"], row["tile_show_description"], row["tile_show_url"]),
+             row["tile_bg_mode"], row["tile_bg_value"], row["tile_bg_scale"], row["tile_opacity"], row["tile_blur"], row["tile_icon_size"], row["tile_title_size"], row["tile_title_color"], row["tile_description_color"], row["tile_url_color"], row["tile_show_description"], row["tile_show_url"]),
         )
     return {"id": cur.lastrowid}
 
@@ -1263,7 +1267,7 @@ def export_settings(theme: str = "dark"):
     with db() as conn:
         categories = [dict(r) for r in conn.execute("SELECT id,name,icon,sort_order FROM categories ORDER BY sort_order,id").fetchall()]
         apps = [dict(r) for r in conn.execute("""SELECT id,name,url,description,category_id,icon,favorite,open_mode,size,status_enabled,sort_order,
-        tile_bg_mode,tile_bg_value,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_title_color,tile_description_color,tile_url_color,tile_show_description,tile_show_url
+        tile_bg_mode,tile_bg_value,tile_bg_scale,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_title_color,tile_description_color,tile_url_color,tile_show_description,tile_show_url
         FROM apps ORDER BY sort_order,id""").fetchall()]
     for item in apps:
         item["favorite"] = bool(item["favorite"])
@@ -1311,8 +1315,8 @@ def import_settings(settings: DashboardSettings):
                 sort_order = int(app_item.sort_order) if has_explicit_order else index
                 conn.execute(
                     """INSERT INTO apps(name,url,description,category_id,icon,favorite,open_mode,size,status_enabled,sort_order,
-                    tile_bg_mode,tile_bg_value,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_title_color,tile_description_color,tile_url_color,tile_show_description,tile_show_url)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    tile_bg_mode,tile_bg_value,tile_bg_scale,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_title_color,tile_description_color,tile_url_color,tile_show_description,tile_show_url)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         app_item.name.strip(),
                         app_item.url.strip(),
@@ -1326,6 +1330,7 @@ def import_settings(settings: DashboardSettings):
                         sort_order,
                         app_item.tile_bg_mode,
                         app_item.tile_bg_value.strip(),
+                        app_item.tile_bg_scale,
                         app_item.tile_opacity,
                         app_item.tile_blur,
                         app_item.tile_icon_size,

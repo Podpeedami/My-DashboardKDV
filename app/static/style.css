@@ -381,21 +381,22 @@ button:hover {
   isolation:isolate;
   overflow:hidden;
 }
-.app-card .tile-background-layer {
+.app-card.tile-image-background > .tile-background-layer {
   position:absolute;
-  inset:-14px;
+  left:50%;
+  top:50%;
   z-index:0;
-  width:calc(100% + 28px);
-  height:calc(100% + 28px);
+  width:100%;
+  height:100%;
   border:0;
   border-radius:inherit;
-  object-fit:cover;
+  object-fit:contain;
   object-position:center;
   opacity:var(--tile-bg-opacity,1);
   filter:blur(var(--tile-blur,6px));
   -webkit-filter:blur(var(--tile-blur,6px));
-  transform:scale(1.04);
-  transform-origin:center;
+  transform:translate(-50%,-50%);
+  transform-origin:center center;
   pointer-events:none;
   user-select:none;
 }
@@ -442,11 +443,11 @@ button:hover {
   border-radius:inherit;
   background-image:var(--preview-image, none);
   background-position:center;
-  background-size:cover;
+  background-size:var(--preview-bg-size,contain);
   background-repeat:no-repeat;
   opacity:var(--preview-image-opacity,1);
   filter:blur(var(--preview-tile-blur,0px));
-  transform:scale(1.04);
+  transform:scale(var(--preview-bg-scale,1));
   pointer-events:none;
 }
 .tile-style-preview > * { position:relative; z-index:1; }

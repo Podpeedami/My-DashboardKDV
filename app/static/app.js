@@ -267,14 +267,34 @@ async function saveEmbyConfig(){
 }
 
 async function loadData(){
-  const [cr, ar] = await Promise.all([fetch('/api/categories'), fetch('/api/apps')]);
-  categories = await cr.json();
-  apps = (await ar.json()).map(a => ({
+  const [cr, ar] = await Promise.all([fetch('/api/categories', {cache:'no-store'}), fetch('/api/apps', {cache:'no-store'})]);
+  const categoryData = await cr.json().catch(()=>[]);
+  const appData = await ar.json().catch(()=>[]);
+  if(!cr.ok) throw new Error(categoryData?.detail || `Ошибка загрузки категорий (${cr.status})`);
+  if(!ar.ok) throw new Error(appData?.detail || `Ошибка загрузки приложений (${ar.status})`);
+  categories = Array.isArray(categoryData) ? categoryData.map(c=>({
+    ...c,
+    id:Number(c.id),
+    name:String(c.name ?? ''),
+    icon:String(c.icon ?? '📁'),
+    sort_order:Number(c.sort_order ?? 0),
+    app_count:Number(c.app_count ?? 0)
+  })) : [];
+  apps = Array.isArray(appData) ? appData.map(a => ({
     ...a,
+    id:Number(a.id),
+    name:String(a.name ?? ''),
+    url:String(a.url ?? ''),
+    description:String(a.description ?? ''),
+    category_id:Number(a.category_id),
+    icon:String(a.icon ?? '🚀'),
+    favorite:Boolean(a.favorite),
     open_mode: a.open_mode === 'embedded' ? 'embedded' : 'external',
+    size:['mini','small','medium','wide','tall','large','xl','hero'].includes(a.size)?a.size:'medium',
     tile_bg_mode: ['default','color','image'].includes(a.tile_bg_mode) ? a.tile_bg_mode : 'default',
-    tile_bg_value: String(a.tile_bg_value || '').trim()
-  }));
+    tile_bg_value: String(a.tile_bg_value || '').trim(),
+    tile_bg_scale: Math.round(clampNumber(a.tile_bg_scale,50,200,100))
+  })) : [];
   if(selectedCategory !== "all" && selectedCategory !== "favorites" && !categories.some(c => c.id === selectedCategory)) selectedCategory = "all";
   renderCategories();
   renderApps();
@@ -351,14 +371,15 @@ function tileStyle(a){
   const urlColor=/^#[0-9a-f]{6}$/i.test(String(a.tile_url_color||''))?String(a.tile_url_color):'#94a3b8';
   const bgMode=['default','color','image'].includes(a.tile_bg_mode)?a.tile_bg_mode:'default';
   const bgValue=String(a.tile_bg_value||'').trim();
+  const bgScale=Math.round(clampNumber(a.tile_bg_scale,50,200,100));
   const rgb=getComputedStyle(document.documentElement).getPropertyValue('--card-rgb').trim()||'25,29,39';
   let backgroundColor=`rgba(${rgb},${opacity})`;
-  let imageVars='--tile-bg-image:none;--tile-bg-opacity:1;';
+  let imageVars='--tile-bg-image:none;--tile-bg-opacity:1;--tile-bg-size:100%;';
   if(bgMode==='color'){
     const colorRgb=hexToRgb(bgValue)||rgb;
     backgroundColor=`rgba(${colorRgb},${opacity})`;
   }else if(bgMode==='image' && bgValue){
-    imageVars=`--tile-bg-image:url("${safeCssUrl(bgValue)}");--tile-bg-opacity:${opacity};`;
+    imageVars=`--tile-bg-image:url("${safeCssUrl(bgValue)}");--tile-bg-opacity:${opacity};--tile-bg-scale:${bgScale/100};`;
     backgroundColor=`rgba(${rgb},1)`;
   }
   return `style="background-color:${backgroundColor};backdrop-filter:blur(${blur}px);-webkit-backdrop-filter:blur(${blur}px);--tile-blur:${blur}px;--tile-icon-size:${iconSize}px;--tile-title-size:${titleSize}px;--tile-title-color:${safeCssColor(titleColor)};--tile-description-color:${safeCssColor(descriptionColor)};--tile-url-color:${safeCssColor(urlColor)};${imageVars}"`;
@@ -378,10 +399,11 @@ function appCard(a){
   if(showDescription && description)details.push(`<div class="app-description">${escapeHtml(description)}</div>`);
   if(showUrl && url)details.push(`<div class="app-url">${escapeHtml(url)}</div>`);
   const bgValue=String(a.tile_bg_value||'').trim();
+  const bgScale=Math.round(clampNumber(a.tile_bg_scale,50,200,100));
   const hasImageBg=a.tile_bg_mode==='image' && !!bgValue;
   const openBadge=a.open_mode==='embedded' ? '<span class="app-open-badge" title="Открывается внутри Dashboard">▣</span>' : '';
   const bgClass=hasImageBg?' tile-image-background':'';
-  const tileBackground=hasImageBg ? `<img class="tile-background-layer" src="${escapeAttr(bgValue)}" alt="" aria-hidden="true" loading="eager" decoding="async" onerror="this.style.display='none'">` : '';
+  const tileBackground=hasImageBg ? `<img class="tile-background-layer" src="${escapeAttr(bgValue)}" alt="" aria-hidden="true" loading="eager" decoding="async" style="width:${bgScale}%;height:${bgScale}%;" onerror="this.style.display='none'">` : '';
   return `<article class="app-card size-${size}${bgClass}${panelEditMode?' order-editing':''}" data-app-id="${a.id}" ${dragAttrs} ${tileStyle(a)} onclick="openApp(${a.id})">
     ${tileBackground}
     ${dragHandle}
@@ -496,7 +518,7 @@ async function savePanelLayout(){
       const payload={
         name:a.name,url:a.url,description:a.description,category_id:a.category_id,icon:a.icon,favorite:!!a.favorite,
         size:change.size||a.size,status_enabled:a.status_enabled!==false,
-        tile_bg_mode:a.tile_bg_mode||'default',tile_bg_value:a.tile_bg_value||'',
+        tile_bg_mode:a.tile_bg_mode||'default',tile_bg_value:a.tile_bg_value||'',tile_bg_scale:Math.round(clampNumber(a.tile_bg_scale,50,200,100)),
         tile_opacity:Number.isFinite(Number(a.tile_opacity))?Number(a.tile_opacity):0.90,
         tile_blur:Number.isFinite(Number(a.tile_blur))?Number(a.tile_blur):6,
         tile_icon_size:Math.round(clampNumber(a.tile_icon_size,24,96,48)),
@@ -712,6 +734,7 @@ function getTileAppearanceFromForm(){
   return {
     tile_bg_mode:mode,
     tile_bg_value:value,
+    tile_bg_scale:Math.round(clampNumber(document.getElementById('tileBgScale')?.value,50,200,100)),
     tile_opacity:clampNumber(document.getElementById('tileOpacity')?.value,45,100,90)/100,
     tile_blur:clampNumber(document.getElementById('tileBlur')?.value,0,20,6),
     tile_icon_size:Math.round(clampNumber(document.getElementById('tileIconSize')?.value,24,96,48)),
@@ -731,6 +754,7 @@ function setTileAppearanceForm(a={}){
   const colorEl=document.getElementById('tileBgColor'); if(colorEl)colorEl.value=/^#[0-9a-f]{6}$/i.test(bgValue)?bgValue:'#191d27';
   const imageEl=document.getElementById('tileBgImage'); if(imageEl)imageEl.value=mode==='image'?bgValue:'';
   const setRange=(id,value)=>{const el=document.getElementById(id);if(el)el.value=String(value);};
+  setRange('tileBgScale',Math.round(clampNumber(a.tile_bg_scale,50,200,100)));
   setRange('tileOpacity',Math.round(clampNumber(a.tile_opacity,0.45,1,0.90)*100));
   setRange('tileBlur',clampNumber(a.tile_blur,0,20,6));
   setRange('tileIconSize',Math.round(clampNumber(a.tile_icon_size,24,96,48)));
@@ -752,6 +776,7 @@ function applyLiveTileAppearancePreview(){
 
   const appearance=getTileAppearanceFromForm();
   const opacity=appearance.tile_opacity;
+  const bgScale=appearance.tile_bg_scale;
   const blur=appearance.tile_blur;
   const iconSize=appearance.tile_icon_size;
   const titleSize=appearance.tile_title_size;
@@ -762,6 +787,9 @@ function applyLiveTileAppearancePreview(){
   const value=appearance.tile_bg_value;
   const rgb=getComputedStyle(document.documentElement).getPropertyValue('--card-rgb').trim()||'25,29,39';
 
+  card.style.setProperty('--tile-bg-scale',String(bgScale/100));
+  const bgLayer=card.querySelector(':scope > .tile-background-layer');
+  if(bgLayer){ bgLayer.style.width=`${bgScale}%`; bgLayer.style.height=`${bgScale}%`; }
   card.style.setProperty('--tile-blur',`${blur}px`);
   card.style.setProperty('--tile-icon-size',`${iconSize}px`);
   card.style.setProperty('--tile-title-size',`${titleSize}px`);
@@ -800,7 +828,9 @@ function updateTileAppearancePreview(){
   const mode=document.getElementById('tileBgMode')?.value||'default';
   document.getElementById('tileBgColorRow')?.classList.toggle('hidden',mode!=='color');
   document.getElementById('tileBgImageRow')?.classList.toggle('hidden',mode!=='image');
+  document.getElementById('tileBgScaleRow')?.classList.toggle('hidden',mode!=='image');
   const opacity=clampNumber(document.getElementById('tileOpacity')?.value,45,100,90)/100;
+  const bgScale=Math.round(clampNumber(document.getElementById('tileBgScale')?.value,50,200,100));
   const blur=clampNumber(document.getElementById('tileBlur')?.value,0,20,6);
   const iconSize=Math.round(clampNumber(document.getElementById('tileIconSize')?.value,24,96,48));
   const titleSize=Math.round(clampNumber(document.getElementById('tileTitleSize')?.value,12,28,17));
@@ -815,6 +845,7 @@ function updateTileAppearancePreview(){
     preview.style.backgroundColor=`rgba(${rgb},${mode==='image'?1:opacity})`;
     preview.style.backdropFilter=`blur(${blur}px)`;
     preview.style.webkitBackdropFilter=`blur(${blur}px)`;
+    preview.style.setProperty('--preview-bg-size',`${bgScale}%`);
     preview.style.setProperty('--preview-tile-blur',`${blur}px`);
     preview.style.setProperty('--preview-title-color',safeCssColor(titleColor));
     preview.style.setProperty('--preview-description-color',safeCssColor(descriptionColor));
@@ -828,7 +859,7 @@ function updateTileAppearancePreview(){
     const desc=preview.querySelector('.preview-description'); if(desc){desc.classList.toggle('hidden',!document.getElementById('tileShowDescription')?.checked); desc.textContent=document.getElementById('description')?.value.trim()||'Краткое описание приложения';}
     const url=preview.querySelector('.preview-url'); if(url){url.classList.toggle('hidden',!document.getElementById('tileShowUrl')?.checked); url.textContent=document.getElementById('url')?.value.trim()||'https://example.com';}
   }
-  const valueEls={tileOpacityValue:`${Math.round(opacity*100)}%`,tileBlurValue:`${blur} px`,tileIconSizeValue:`${iconSize} px`,tileTitleSizeValue:`${titleSize} px`};
+  const valueEls={tileBgScaleValue:`${bgScale}%`,tileOpacityValue:`${Math.round(opacity*100)}%`,tileBlurValue:`${blur} px`,tileIconSizeValue:`${iconSize} px`,tileTitleSizeValue:`${titleSize} px`};
   for(const [id,value] of Object.entries(valueEls)){const el=document.getElementById(id);if(el)el.textContent=value;}
   applyLiveTileAppearancePreview();
 }
