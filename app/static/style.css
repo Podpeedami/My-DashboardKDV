@@ -948,3 +948,17 @@ body.embedded-open { overflow:hidden; }
 .file-button:hover{border-color:rgba(124,140,255,.55)}
 .file-button input[type="file"]{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;pointer-events:none}
 @media(max-width:620px){.settings-actions{align-items:stretch;flex-direction:column}.settings-actions>button,.settings-actions>.file-button{width:100%}}
+
+
+/* Quick-add templates for popular local services */
+.service-templates-card{width:min(760px,100%)}
+.service-template-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:18px 0}
+.service-template-card{display:flex;align-items:center;gap:12px;text-align:left;padding:13px;border:1px solid var(--line);border-radius:14px;background:var(--panel2);color:var(--text);min-width:0;transition:border-color .15s,transform .15s}
+.service-template-card:hover{border-color:var(--accent);transform:translateY(-1px)}
+.service-template-icon{display:grid;place-items:center;width:42px;height:42px;flex:0 0 42px;border-radius:12px;background:var(--panel);font-size:24px}
+.service-template-copy{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1}
+.service-template-copy strong{font-size:14px}
+.service-template-copy small{font-size:11px;line-height:1.35;color:var(--muted)}
+.service-template-copy code{font-size:11px;color:var(--muted)}
+.service-template-add{font-size:20px;color:var(--accent);flex:0 0 auto}
+@media(max-width:620px){.service-template-grid{grid-template-columns:1fr}.service-templates-card{padding:22px 16px}}

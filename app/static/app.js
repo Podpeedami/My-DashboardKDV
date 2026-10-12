@@ -1091,6 +1091,42 @@ async function saveGroup(e){
 function editSelectedGroup(){if(typeof selectedCategory!=='number'||selectedGroup==='all'){alert('Сначала выберите группу');return}const g=groups.find(x=>x.id===selectedGroup);if(g)openGroupModal(g)}
 async function deleteSelectedGroup(){if(typeof selectedCategory!=='number'||selectedGroup==='all'){alert('Сначала выберите группу');return}const g=groups.find(x=>x.id===selectedGroup);if(!g||!confirm(`Удалить группу «${g.name}»? Приложения останутся в категории без группы.`))return;const r=await fetch(`/api/groups/${g.id}`,{method:'DELETE'});if(!r.ok){alert((await r.json()).detail||'Ошибка удаления группы');return}selectedGroup='all';await loadData();}
 
+const LOCAL_SERVICE_TEMPLATES = [
+  {id:'mstream',name:'mStream Music',description:'Музыкальный сервер и веб-плеер',icon:'🎵',port:3000,categoryHint:'Музыка',open_mode:'embedded'},
+  {id:'emby',name:'Emby',description:'Медиасервер и библиотека фильмов',icon:'📺',port:8096,categoryHint:'Медиа',open_mode:'external'},
+  {id:'jellyfin',name:'Jellyfin',description:'Свободный медиасервер',icon:'🎬',port:8096,categoryHint:'Медиа',open_mode:'external'},
+  {id:'plex',name:'Plex',description:'Медиатека и потоковое воспроизведение',icon:'🎞️',port:32400,categoryHint:'Медиа',open_mode:'external'},
+  {id:'portainer',name:'Portainer',description:'Управление Docker-контейнерами',icon:'🐳',port:9000,categoryHint:'Сервер',open_mode:'external'},
+  {id:'grafana',name:'Grafana',description:'Панели мониторинга и метрики',icon:'📊',port:3000,categoryHint:'Сервер',open_mode:'external'},
+  {id:'homeassistant',name:'Home Assistant',description:'Управление умным домом',icon:'🏠',port:8123,categoryHint:'Дом',open_mode:'external'},
+  {id:'sonarr',name:'Sonarr',description:'Управление библиотекой сериалов',icon:'📺',port:8989,categoryHint:'Медиа',open_mode:'external'},
+  {id:'radarr',name:'Radarr',description:'Управление библиотекой фильмов',icon:'🎬',port:7878,categoryHint:'Медиа',open_mode:'external'},
+  {id:'lidarr',name:'Lidarr',description:'Управление музыкальной библиотекой',icon:'🎧',port:8686,categoryHint:'Музыка',open_mode:'external'},
+  {id:'prowlarr',name:'Prowlarr',description:'Менеджер индексаторов',icon:'🧰',port:9696,categoryHint:'Сервер',open_mode:'external'},
+  {id:'prometheus',name:'Prometheus',description:'Сбор и хранение метрик',icon:'📈',port:9090,categoryHint:'Сервер',open_mode:'external'},
+  {id:'jellyseerr',name:'Jellyseerr',description:'Запросы на фильмы и сериалы',icon:'🎟️',port:5055,categoryHint:'Медиа',open_mode:'external'}
+];
+
+function openServiceTemplatesModal(){
+  const modal=document.getElementById('serviceTemplatesModal');
+  const grid=document.getElementById('serviceTemplateGrid');
+  if(!modal||!grid)return;
+  grid.innerHTML=LOCAL_SERVICE_TEMPLATES.map(t=>`<button type="button" class="service-template-card" onclick="selectLocalServiceTemplate('${t.id}')"><span class="service-template-icon">${escapeHtml(t.icon)}</span><span class="service-template-copy"><strong>${escapeHtml(t.name)}</strong><small>${escapeHtml(t.description)}</small><code>:${t.port}</code></span><span class="service-template-add">＋</span></button>`).join('');
+  modal.classList.remove('hidden');
+}
+function closeServiceTemplatesModal(){document.getElementById('serviceTemplatesModal')?.classList.add('hidden')}
+function selectLocalServiceTemplate(templateId){
+  const t=LOCAL_SERVICE_TEMPLATES.find(item=>item.id===templateId);
+  if(!t)return;
+  closeServiceTemplatesModal();
+  const categoryName=String(t.categoryHint||'').toLowerCase();
+  const preferred=categories.find(c=>String(c.name||'').toLowerCase().includes(categoryName));
+  const categoryId=preferred?.id ?? (typeof selectedCategory==='number'?selectedCategory:categories[0]?.id);
+  openAppModal({name:t.name,url:`http://192.168.1.100:${t.port}`,description:t.description,icon:t.icon,favorite:false,open_mode:t.open_mode,size:'medium',category_id:categoryId,group_id:null,tile_bg_mode:'default',tile_bg_value:'',tile_bg_scale:100,tile_opacity:.90,tile_blur:6,tile_icon_size:48,tile_title_size:17,tile_title_color:'#ffffff',tile_description_color:'#cbd5e1',tile_url_color:'#94a3b8',tile_show_description:true,tile_show_url:false});
+  const url=document.getElementById('url');
+  if(url){url.focus();url.select()}
+}
+
 function openAppModal(a=null){
   document.getElementById('modal').classList.remove('hidden');
   document.getElementById('modalTitle').textContent=a?'Изменить приложение':'Добавить приложение';

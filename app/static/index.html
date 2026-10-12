@@ -12,7 +12,7 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/static/pwa/icon-192.png">
   <link rel="apple-touch-icon" href="/static/pwa/icon-192.png">
   <title>My DashboardKDV</title>
-  <link rel="stylesheet" href="/static/style.css?v=55">
+  <link rel="stylesheet" href="/static/style.css?v=56">
 </head>
 <body>
 <div class="background"><div id="backgroundImage" class="background-image"></div></div>
@@ -23,7 +23,7 @@
       <div class="brand">My DashboardKDV</div>
       <h1>Все приложения в одном месте</h1>
     </div>
-    <div class="header-actions"><button id="themeToggle" type="button">☀️ Светлая</button><button id="settingsButton" type="button">⚙ Настройки</button><button id="pwaInstallButton" type="button" class="hidden">📲 Установить</button><button id="panelEditButton" type="button">✏️ Редактировать</button><button id="panelEditCancel" type="button" class="hidden">✖ Отмена</button><button class="primary" onclick="openAppModal()">＋ Приложение</button></div>
+    <div class="header-actions"><button id="themeToggle" type="button">☀️ Светлая</button><button id="settingsButton" type="button">⚙ Настройки</button><button id="pwaInstallButton" type="button" class="hidden">📲 Установить</button><button id="panelEditButton" type="button">✏️ Редактировать</button><button id="panelEditCancel" type="button" class="hidden">✖ Отмена</button><button type="button" onclick="openServiceTemplatesModal()">📦 Шаблоны</button><button class="primary" onclick="openAppModal()">＋ Приложение</button></div>
   </header>
 
   <section class="toolbar">
@@ -356,6 +356,16 @@
   </div>
 </div>
 
+<div id="serviceTemplatesModal" class="modal hidden">
+  <div class="modal-card service-templates-card">
+    <button class="close" onclick="closeServiceTemplatesModal()">×</button>
+    <h2>📦 Шаблоны локальных сервисов</h2>
+    <p class="settings-note">Выбери сервис — форма добавления заполнится автоматически. Перед сохранением проверь IP-адрес, порт, категорию и режим открытия.</p>
+    <div class="service-template-grid" id="serviceTemplateGrid"></div>
+    <div class="settings-note compact">В шаблонах указан пример адреса <code>192.168.1.100</code>. Замени его на IP-адрес устройства, где запущен сервис. Порты могут отличаться, если ты менял конфигурацию. Шаблон только заполняет форму и ничего не сохраняет автоматически.</div>
+  </div>
+</div>
+
 <div id="categoryModal" class="modal hidden">
   <div class="modal-card small">
     <button class="close" onclick="closeCategoryModal()">×</button>
@@ -464,7 +474,7 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=55"></script>
+<script src="/static/app.js?v=56"></script>
 
 </body>
 </html>
