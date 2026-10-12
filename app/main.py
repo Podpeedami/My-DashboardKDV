@@ -455,6 +455,15 @@ class DashboardSettings(BaseModel):
     preferences: dict = Field(default_factory=dict)
 
 
+class SelectedAppsImport(BaseModel):
+    type: Literal["my-dashboardkdv-selected-apps"]
+    version: int = 1
+    categories: list[ExportCategory] = Field(default_factory=list)
+    groups: list[ExportGroup] = Field(default_factory=list)
+    apps: list[ExportApp] = Field(default_factory=list)
+    assets: list[dict] = Field(default_factory=list)
+
+
 class EmbyConfig(BaseModel):
     name: str = Field(default="Emby", max_length=100)
     url: str = Field(default="", max_length=500)
@@ -948,6 +957,128 @@ def duplicate_app(app_id: int):
              row["tile_bg_mode"], row["tile_bg_value"], row["tile_bg_scale"], row["tile_opacity"], row["tile_blur"], row["tile_icon_size"], row["tile_title_size"], row["tile_title_color"], row["tile_description_color"], row["tile_url_color"], row["tile_show_description"], row["tile_show_url"]),
         )
     return {"id": cur.lastrowid}
+
+
+@app.post("/api/apps/import-selected")
+def import_selected_apps(payload: SelectedAppsImport):
+    """Add selected apps from a portable export without replacing dashboard data."""
+    if not payload.apps:
+        raise HTTPException(400, "В файле нет приложений для импорта")
+
+    raw_payload = payload.model_dump() if hasattr(payload, "model_dump") else dict(payload)
+    try:
+        path_map = _restore_assets(raw_payload.get("assets", []))
+        category_source_ids = {int(item.id) for item in payload.categories}
+        for item in payload.apps:
+            if int(item.category_id) not in category_source_ids:
+                raise ValueError(f"Для приложения «{item.name}» в файле отсутствует категория")
+        group_source_ids = {int(item.id) for item in payload.groups}
+        for item in payload.groups:
+            if int(item.category_id) not in category_source_ids:
+                raise ValueError(f"Для группы «{item.name}» в файле отсутствует категория")
+        for item in payload.apps:
+            if item.group_id is not None and int(item.group_id) not in group_source_ids:
+                raise ValueError(f"Для приложения «{item.name}» в файле отсутствует группа")
+
+        added = 0
+        skipped = 0
+        categories_created = 0
+        groups_created = 0
+        with db() as conn:
+            conn.execute("PRAGMA foreign_keys = ON")
+            category_map: dict[int, int] = {}
+            for category in payload.categories:
+                existing = conn.execute(
+                    "SELECT id FROM categories WHERE lower(trim(name))=lower(trim(?)) LIMIT 1",
+                    (category.name,),
+                ).fetchone()
+                if existing:
+                    category_map[int(category.id)] = int(existing["id"])
+                    continue
+                next_order = conn.execute(
+                    "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM categories"
+                ).fetchone()[0]
+                cur = conn.execute(
+                    "INSERT INTO categories(name,icon,sort_order) VALUES (?,?,?)",
+                    (category.name.strip(), path_map.get(category.icon.strip(), category.icon.strip()) or "📁", int(next_order)),
+                )
+                category_map[int(category.id)] = int(cur.lastrowid)
+                categories_created += 1
+
+            group_map: dict[int, int] = {}
+            for group in payload.groups:
+                target_category_id = category_map.get(int(group.category_id))
+                if target_category_id is None:
+                    raise ValueError(f"Категория для группы «{group.name}» не найдена")
+                existing = conn.execute(
+                    "SELECT id FROM groups WHERE category_id=? AND lower(trim(name))=lower(trim(?)) LIMIT 1",
+                    (target_category_id, group.name),
+                ).fetchone()
+                if existing:
+                    group_map[int(group.id)] = int(existing["id"])
+                    continue
+                next_order = conn.execute(
+                    "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM groups WHERE category_id=?",
+                    (target_category_id,),
+                ).fetchone()[0]
+                cur = conn.execute(
+                    "INSERT INTO groups(category_id,name,icon,sort_order) VALUES (?,?,?,?)",
+                    (target_category_id, group.name.strip(), path_map.get(group.icon.strip(), group.icon.strip()) or "📂", int(next_order)),
+                )
+                group_map[int(group.id)] = int(cur.lastrowid)
+                groups_created += 1
+
+            existing_rows = conn.execute("SELECT name,url FROM apps").fetchall()
+            app_keys = {
+                (str(row["name"] or "").strip().casefold(), str(row["url"] or "").strip().rstrip("/").casefold())
+                for row in existing_rows
+            }
+            next_order = int(conn.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM apps").fetchone()[0])
+            for item in sorted(payload.apps, key=lambda value: (int(value.sort_order), int(value.id))):
+                key = (item.name.strip().casefold(), item.url.strip().rstrip("/").casefold())
+                if key in app_keys:
+                    skipped += 1
+                    continue
+                target_category_id = category_map.get(int(item.category_id))
+                if target_category_id is None:
+                    raise ValueError(f"Категория для приложения «{item.name}» не найдена")
+                target_group_id = group_map.get(int(item.group_id)) if item.group_id is not None else None
+                if item.group_id is not None and target_group_id is None:
+                    raise ValueError(f"Группа для приложения «{item.name}» не найдена")
+                if target_group_id is not None and not conn.execute(
+                    "SELECT 1 FROM groups WHERE id=? AND category_id=?",
+                    (target_group_id, target_category_id),
+                ).fetchone():
+                    raise ValueError(f"Группа приложения «{item.name}» относится к другой категории")
+
+                conn.execute(
+                    """INSERT INTO apps(name,url,description,category_id,group_id,icon,favorite,open_mode,size,status_enabled,sort_order,
+                    tile_bg_mode,tile_bg_value,tile_bg_scale,tile_opacity,tile_blur,tile_icon_size,tile_title_size,tile_title_color,tile_description_color,tile_url_color,tile_show_description,tile_show_url)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        item.name.strip(), item.url.strip(), item.description.strip(), target_category_id, target_group_id,
+                        path_map.get(item.icon.strip(), item.icon.strip()) or "🚀", int(item.favorite), item.open_mode,
+                        item.size if item.size in APP_TILE_SIZES else "medium", int(item.status_enabled), next_order,
+                        item.tile_bg_mode, path_map.get(item.tile_bg_value.strip(), item.tile_bg_value.strip()), item.tile_bg_scale,
+                        item.tile_opacity, item.tile_blur, item.tile_icon_size, item.tile_title_size, item.tile_title_color,
+                        item.tile_description_color, item.tile_url_color, int(item.tile_show_description), int(item.tile_show_url),
+                    ),
+                )
+                next_order += 1
+                added += 1
+                app_keys.add(key)
+
+        return {
+            "ok": True,
+            "added": added,
+            "skipped": skipped,
+            "categories_created": categories_created,
+            "groups_created": groups_created,
+        }
+    except HTTPException:
+        raise
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.delete("/api/apps/{app_id}")

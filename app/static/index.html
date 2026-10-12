@@ -12,7 +12,7 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/static/pwa/icon-192.png">
   <link rel="apple-touch-icon" href="/static/pwa/icon-192.png">
   <title>My DashboardKDV</title>
-  <link rel="stylesheet" href="/static/style.css?v=56">
+  <link rel="stylesheet" href="/static/style.css?v=57">
 </head>
 <body>
 <div class="background"><div id="backgroundImage" class="background-image"></div></div>
@@ -314,6 +314,18 @@
         </div>
         <div class="settings-note compact">API-ключ Emby намеренно не включается в JSON-экспорт.</div>
       </div>
+      <div class="settings-section">
+        <h3>📦 Перенос отдельных приложений</h3>
+        <p class="settings-note compact">Выбери несколько карточек и сохрани их отдельным JSON-файлом. Такой файл можно импортировать в другой My DashboardKDV без замены текущих приложений, категорий и групп.</p>
+        <div class="settings-actions">
+          <button type="button" onclick="openSelectedAppsExportModal()">📤 Экспортировать выбранные приложения</button>
+          <label class="file-button">📥 Добавить приложения из JSON
+            <input id="selectedAppsFile" type="file" accept="application/json,.json" onchange="importSelectedAppsFile(event)">
+          </label>
+        </div>
+        <div class="settings-note compact">Категории и группы будут сопоставлены по названию или созданы при необходимости. Совпадающие приложения с тем же названием и URL пропускаются. Локальные иконки и фоны выбранных плиток включаются в файл.</div>
+        <div id="selectedAppsImportStatus" class="settings-note compact" aria-live="polite"></div>
+      </div>
     </section>
 
     <section class="settings-group" data-settings-panel="integrations">
@@ -352,7 +364,7 @@
       </div>
     </section>
 
-    <div class="settings-warning">⚠ Импорт JSON заменяет приложения, категории и группы. Восстановление ZIP заменяет всё постоянное содержимое data/. Перед восстановлением автоматически создаётся защитная копия; ZIP содержит API-ключ Emby.</div>
+    <div class="settings-warning">⚠ Импорт полного JSON заменяет приложения, категории и группы. Импорт JSON выбранных приложений выше только добавляет карточки и пропускает совпадения. Восстановление ZIP заменяет всё постоянное содержимое data/. Перед восстановлением автоматически создаётся защитная копия; ZIP содержит API-ключ Emby.</div>
   </div>
 </div>
 
@@ -363,6 +375,27 @@
     <p class="settings-note">Выбери сервис — форма добавления заполнится автоматически. Перед сохранением проверь IP-адрес, порт, категорию и режим открытия.</p>
     <div class="service-template-grid" id="serviceTemplateGrid"></div>
     <div class="settings-note compact">В шаблонах указан пример адреса <code>192.168.1.100</code>. Замени его на IP-адрес устройства, где запущен сервис. Порты могут отличаться, если ты менял конфигурацию. Шаблон только заполняет форму и ничего не сохраняет автоматически.</div>
+  </div>
+</div>
+
+<div id="selectedAppsExportModal" class="modal hidden">
+  <div class="modal-card selected-apps-export-card">
+    <button class="close" type="button" onclick="closeSelectedAppsExportModal()">×</button>
+    <h2>📤 Экспорт выбранных приложений</h2>
+    <p class="settings-note">Отметь приложения, которые нужно перенести. Настройки текущего Dashboard не изменятся.</p>
+    <div class="selected-apps-export-tools">
+      <input id="selectedAppsExportSearch" type="search" placeholder="Поиск по названию, категории или URL" oninput="renderSelectedAppsExportList()" aria-label="Поиск приложений для экспорта">
+      <div class="settings-actions">
+        <button type="button" onclick="selectAllAppsForExport(true)">Выбрать все</button>
+        <button type="button" onclick="selectAllAppsForExport(false)">Снять выбор</button>
+      </div>
+    </div>
+    <div id="selectedAppsExportCount" class="settings-note compact" aria-live="polite"></div>
+    <div id="selectedAppsExportList" class="selected-apps-export-list"></div>
+    <div class="selected-apps-export-footer">
+      <button type="button" onclick="closeSelectedAppsExportModal()">Отмена</button>
+      <button id="downloadSelectedAppsButton" class="primary" type="button" onclick="exportSelectedApps()">⬇ Скачать JSON</button>
+    </div>
   </div>
 </div>
 
@@ -474,7 +507,7 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=56"></script>
+<script src="/static/app.js?v=57"></script>
 
 </body>
 </html>

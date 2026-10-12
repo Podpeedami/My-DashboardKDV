@@ -6,6 +6,7 @@ let appearanceSettings = {card_opacity:0.90, card_blur:6, background_blur:2, bac
 let currentTheme = localStorage.getItem("mdkdv-theme") === "light" ? "light" : "dark";
 let fixedCategory = "";
 let deferredPwaInstallPrompt = null;
+let selectedAppsForExport = new Set();
 
 
 
@@ -1378,6 +1379,146 @@ async function importSettingsFile(event){
   }catch(e){alert(`Не удалось импортировать настройки: ${e.message}`)}finally{event.target.value=''}
 }
 
+
+function openSelectedAppsExportModal(){
+  const modal=document.getElementById('selectedAppsExportModal');
+  if(!modal)return;
+  selectedAppsForExport=new Set();
+  const search=document.getElementById('selectedAppsExportSearch');
+  if(search)search.value='';
+  renderSelectedAppsExportList();
+  modal.classList.remove('hidden');
+}
+
+function closeSelectedAppsExportModal(){
+  document.getElementById('selectedAppsExportModal')?.classList.add('hidden');
+}
+
+function selectedAppsExportLabel(app){
+  const category=categories.find(item=>item.id===Number(app.category_id));
+  const group=groups.find(item=>item.id===Number(app.group_id));
+  return [category?.name,group?.name].filter(Boolean).join(' / ');
+}
+
+function updateSelectedAppsExportCount(){
+  const count=document.getElementById('selectedAppsExportCount');
+  const button=document.getElementById('downloadSelectedAppsButton');
+  const number=selectedAppsForExport.size;
+  if(count)count.textContent=`Выбрано: ${number} из ${apps.length}`;
+  if(button)button.disabled=number===0;
+}
+
+function renderSelectedAppsExportList(){
+  const list=document.getElementById('selectedAppsExportList');
+  if(!list)return;
+  const query=String(document.getElementById('selectedAppsExportSearch')?.value||'').trim().toLocaleLowerCase();
+  const visible=apps.filter(app=>{
+    if(!query)return true;
+    const haystack=[app.name,app.url,app.description,selectedAppsExportLabel(app)].join(' ').toLocaleLowerCase();
+    return haystack.includes(query);
+  });
+  if(!visible.length){
+    list.innerHTML='<div class="local-services-empty">Ничего не найдено.</div>';
+  }else{
+    list.innerHTML=visible.map(app=>{
+      const extra=selectedAppsExportLabel(app);
+      const iconValue=String(app.icon||'🚀');
+      const iconMarkup=iconValue.startsWith('/icons/')
+        ? `<span class="selected-app-export-icon-image">${iconHtml(iconValue,'selected-app-export-image')}</span>`
+        : `<span class="selected-app-export-icon">${escapeHtml(/^https?:\/\//i.test(iconValue)?'🔗':iconValue)}</span>`;
+      return `<label class="selected-app-export-item"><input type="checkbox" data-app-id="${Number(app.id)}" ${selectedAppsForExport.has(Number(app.id))?'checked':''} onchange="toggleSelectedAppForExport(this.dataset.appId,this.checked)">${iconMarkup}<span class="selected-app-export-copy"><strong>${escapeHtml(app.name)}</strong><small>${escapeHtml(extra||'Без категории')} · ${escapeHtml(app.url)}</small></span></label>`;
+    }).join('');
+  }
+  updateSelectedAppsExportCount();
+}
+
+function toggleSelectedAppForExport(id,checked){
+  const appId=Number(id);
+  if(!Number.isFinite(appId))return;
+  if(checked)selectedAppsForExport.add(appId);else selectedAppsForExport.delete(appId);
+  updateSelectedAppsExportCount();
+}
+
+function selectAllAppsForExport(checked){
+  if(checked)selectedAppsForExport=new Set(apps.map(app=>Number(app.id)));
+  else selectedAppsForExport.clear();
+  renderSelectedAppsExportList();
+}
+
+async function exportSelectedApps(){
+  const selected=apps.filter(app=>selectedAppsForExport.has(Number(app.id)));
+  if(!selected.length){alert('Сначала выбери хотя бы одно приложение.');return}
+  const button=document.getElementById('downloadSelectedAppsButton');
+  if(button){button.disabled=true;button.textContent='Готовим файл…'}
+  try{
+    const response=await fetch('/api/settings/export?theme='+encodeURIComponent(currentTheme),{cache:'no-store'});
+    const full=await response.json();
+    if(!response.ok)throw new Error(full.detail||'Не удалось подготовить экспорт');
+    const selectedIds=new Set(selected.map(app=>Number(app.id)));
+    const selectedDataApps=(full.apps||[]).filter(app=>selectedIds.has(Number(app.id)));
+    const categoryIds=new Set(selectedDataApps.map(app=>Number(app.category_id)));
+    const groupIds=new Set(selectedDataApps.filter(app=>app.group_id!==null&&app.group_id!==undefined).map(app=>Number(app.group_id)));
+    const selectedCategories=(full.categories||[]).filter(category=>categoryIds.has(Number(category.id)));
+    const selectedGroups=(full.groups||[]).filter(group=>groupIds.has(Number(group.id)));
+    const referencedAssets=new Set();
+    const rememberAsset=value=>{if(typeof value==='string'&&value.startsWith('/'))referencedAssets.add(value)};
+    selectedCategories.forEach(category=>rememberAsset(category.icon));
+    selectedGroups.forEach(group=>rememberAsset(group.icon));
+    selectedDataApps.forEach(app=>{rememberAsset(app.icon);rememberAsset(app.tile_bg_value)});
+    const payload={
+      type:'my-dashboardkdv-selected-apps',
+      version:1,
+      app_name:'My DashboardKDV',
+      exported_at:new Date().toISOString(),
+      categories:selectedCategories,
+      groups:selectedGroups,
+      apps:selectedDataApps,
+      assets:(full.assets||[]).filter(asset=>referencedAssets.has(asset.path))
+    };
+    const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json;charset=utf-8'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    const timestamp=new Date().toISOString().replaceAll(':','-').replaceAll('.','-').slice(0,19);
+    a.href=url;
+    a.download=`My-DashboardKDV-apps-${timestamp}.json`;
+    document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+    closeSelectedAppsExportModal();
+  }catch(error){alert(`Не удалось экспортировать приложения: ${error.message}`)}
+  finally{if(button){button.disabled=selectedAppsForExport.size===0;button.textContent='⬇ Скачать JSON'}}
+}
+
+async function importSelectedAppsFile(event){
+  const file=event.target.files?.[0];
+  if(!file)return;
+  const status=document.getElementById('selectedAppsImportStatus');
+  if(status)status.textContent='Проверяем файл…';
+  try{
+    const data=JSON.parse(await file.text());
+    if(data?.type!=='my-dashboardkdv-selected-apps'||!Array.isArray(data.apps)||!Array.isArray(data.categories)||!Array.isArray(data.groups)){
+      throw new Error('Это не файл экспорта выбранных приложений My DashboardKDV. Используй файл, созданный кнопкой «Экспортировать выбранные приложения».');
+    }
+    if(!data.apps.length)throw new Error('В файле нет приложений.');
+    const preview=data.apps.slice(0,5).map(app=>`• ${String(app.name||'Без названия')}`).join('\n');
+    const suffix=data.apps.length>5?`\n…и ещё ${data.apps.length-5}`:'';
+    if(!confirm(`Добавить из файла ${data.apps.length} приложений?\n\n${preview}${suffix}\n\nТекущие приложения не удаляются. Совпадения по названию и URL будут пропущены.`)){
+      if(status)status.textContent='Импорт отменён.';
+      return;
+    }
+    const response=await fetch('/api/apps/import-selected',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+    const result=await response.json();
+    if(!response.ok)throw new Error(typeof result.detail==='string'?result.detail:'Сервер не принял файл. Проверь его формат и содержимое.');
+    await loadData();
+    const summary=`Импорт завершён: добавлено ${result.added||0}, пропущено совпадений ${result.skipped||0}. Создано категорий: ${result.categories_created||0}, групп: ${result.groups_created||0}.`;
+    if(status)status.textContent=summary;
+    alert(summary);
+  }catch(error){
+    if(status)status.textContent=`Ошибка импорта: ${error.message}`;
+    alert(`Не удалось импортировать приложения: ${error.message}`);
+  }finally{
+    event.target.value='';
+  }
+}
 
 function formatBackupBytes(value){
   const bytes=Math.max(0,Number(value)||0);
