@@ -1,13 +1,19 @@
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import asyncio
 import hashlib
 import json
 import html
 import ipaddress
 import mimetypes
+import os
 import re
+import shutil
 import socket
 import sqlite3
+import stat
+import tempfile
+import threading
+import zipfile
 import urllib.parse
 import time
 import secrets
@@ -34,6 +40,7 @@ DB_PATH = DATA_DIR / "dashboard.db"
 ICONS_DIR = DATA_DIR / "icons"
 BACKGROUNDS_DIR = DATA_DIR / "backgrounds"
 TILE_BACKGROUNDS_DIR = DATA_DIR / "tile-backgrounds"
+BACKUPS_DIR = DATA_DIR / "backups"
 STATIC_DIR = BASE_DIR / "static"
 
 # Embedded-app reverse proxy sessions. The iframe is served from the same
@@ -46,6 +53,16 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 ICONS_DIR.mkdir(parents=True, exist_ok=True)
 BACKGROUNDS_DIR.mkdir(parents=True, exist_ok=True)
 TILE_BACKGROUNDS_DIR.mkdir(parents=True, exist_ok=True)
+BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
+
+BACKUP_FORMAT = "MyDashboardKDV-full-backup"
+BACKUP_FORMAT_VERSION = 1
+BACKUP_RETENTION_COUNT = 5
+MAX_BACKUP_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
+MAX_BACKUP_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
+MAX_BACKUP_FILES = 20000
+BACKUP_FILENAME_RE = re.compile(r"^my-dashboardkdv-backup-\d{8}-\d{6}-\d{6}-(?:manual|before-restore)\.zip$")
+BACKUP_OPERATION_LOCK = threading.Lock()
 
 APP_TILE_SIZES = {'mini', 'small', 'medium', 'wide', 'tall', 'large', 'xl', 'hero'}
 
@@ -178,7 +195,7 @@ ALLOWED_ICON_MIME = {
     "image/vnd.microsoft.icon": ".ico",
 }
 
-app = FastAPI(title="My DashboardKDV", version="2.11.0")
+app = FastAPI(title="My DashboardKDV", version="2.14.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/icons", StaticFiles(directory=ICONS_DIR), name="icons")
 app.mount("/backgrounds", StaticFiles(directory=BACKGROUNDS_DIR), name="backgrounds")
@@ -1876,3 +1893,415 @@ def import_settings(settings: DashboardSettings):
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     return {"ok": True, "categories": len(settings.categories), "apps": len(settings.apps)}
+
+
+# ---------------------------------------------------------------------------
+# Full ZIP backup / restore
+# The archive contains a consistent SQLite snapshot plus all persistent files
+# under data/, but never includes data/backups/ to prevent recursive archives.
+# ---------------------------------------------------------------------------
+
+def _backup_filename(kind: str) -> str:
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    return f"my-dashboardkdv-backup-{stamp}-{kind}.zip"
+
+
+def _copy_tree_without_symlinks(source: Path, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    for child in source.iterdir():
+        if child.is_symlink():
+            # Do not follow custom symlinks that may point outside the data volume.
+            continue
+        target = destination / child.name
+        if child.is_dir():
+            _copy_tree_without_symlinks(child, target)
+        elif child.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(child, target)
+
+
+def _sqlite_snapshot(source_db: Path, destination_db: Path) -> None:
+    if not source_db.is_file():
+        raise RuntimeError("Файл базы данных Dashboard не найден")
+    destination_db.parent.mkdir(parents=True, exist_ok=True)
+    source_conn = None
+    destination_conn = None
+    try:
+        source_conn = sqlite3.connect(str(source_db), timeout=30)
+        source_conn.execute("PRAGMA busy_timeout=30000")
+        destination_conn = sqlite3.connect(str(destination_db), timeout=30)
+        source_conn.backup(destination_conn, pages=256, sleep=0.05)
+        destination_conn.commit()
+    finally:
+        if destination_conn is not None:
+            destination_conn.close()
+        if source_conn is not None:
+            source_conn.close()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _create_backup_archive(output_path: Path, kind: str) -> dict:
+    """Build a full archive using a consistent SQLite snapshot."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="mdkdv-backup-stage-") as temporary:
+        staging_root = Path(temporary)
+        staged_data = staging_root / "data"
+        staged_data.mkdir(parents=True, exist_ok=True)
+
+        if not DATA_DIR.is_dir():
+            raise RuntimeError("Каталог data не найден")
+        for child in DATA_DIR.iterdir():
+            if child.name == "backups" or child.name in {"dashboard.db-wal", "dashboard.db-shm"}:
+                continue
+            if child.is_symlink():
+                continue
+            target = staged_data / child.name
+            if child.name == "dashboard.db":
+                _sqlite_snapshot(child, target)
+            elif child.is_dir():
+                _copy_tree_without_symlinks(child, target)
+            elif child.is_file():
+                shutil.copy2(child, target)
+
+        db_snapshot = staged_data / "dashboard.db"
+        if not db_snapshot.is_file():
+            _sqlite_snapshot(DB_PATH, db_snapshot)
+
+        file_entries = []
+        staged_files = sorted(path for path in staged_data.rglob("*") if path.is_file() and not path.is_symlink())
+        if len(staged_files) > MAX_BACKUP_FILES:
+            raise RuntimeError(f"Слишком много файлов для резервной копии (максимум {MAX_BACKUP_FILES})")
+        total_size = 0
+        for path in staged_files:
+            relative = path.relative_to(staging_root).as_posix()
+            size = path.stat().st_size
+            total_size += size
+            if total_size > MAX_BACKUP_UNCOMPRESSED_BYTES:
+                raise RuntimeError("Объём резервной копии превышает допустимые 2 ГБ")
+            file_entries.append({"path": relative, "size": size, "sha256": _sha256_file(path)})
+
+        version_path = BASE_DIR.parent / "VERSION"
+        try:
+            app_version = version_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            app_version = app.version
+        manifest = {
+            "format": BACKUP_FORMAT,
+            "format_version": BACKUP_FORMAT_VERSION,
+            "app_name": "My DashboardKDV",
+            "app_version": app_version,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "backup_type": kind,
+            "file_count": len(file_entries),
+            "total_uncompressed_bytes": total_size,
+            "files": file_entries,
+        }
+        output_tmp = output_path.with_name(output_path.name + ".tmp")
+        try:
+            with zipfile.ZipFile(output_tmp, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True) as archive:
+                for path in staged_files:
+                    archive.write(path, arcname=path.relative_to(staging_root).as_posix())
+                archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"))
+            os.replace(output_tmp, output_path)
+        finally:
+            if output_tmp.exists():
+                output_tmp.unlink()
+
+    return {
+        "filename": output_path.name,
+        "size_bytes": output_path.stat().st_size,
+        "created_at": datetime.fromtimestamp(output_path.stat().st_mtime, timezone.utc).isoformat(),
+        "backup_type": kind,
+    }
+
+
+def _is_managed_backup(path: Path) -> bool:
+    return path.is_file() and not path.is_symlink() and bool(BACKUP_FILENAME_RE.fullmatch(path.name))
+
+
+def _prune_backups() -> None:
+    BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
+    backups = sorted(
+        (path for path in BACKUPS_DIR.iterdir() if _is_managed_backup(path)),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for old in backups[BACKUP_RETENTION_COUNT:]:
+        try:
+            old.unlink()
+        except OSError:
+            # A failure to prune should not invalidate a freshly created backup.
+            pass
+
+
+def _create_stored_backup(kind: str) -> dict:
+    if kind not in {"manual", "before-restore"}:
+        raise ValueError("Недопустимый тип резервной копии")
+    BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
+    path = BACKUPS_DIR / _backup_filename(kind)
+    result = _create_backup_archive(path, kind)
+    _prune_backups()
+    return result
+
+
+def _validate_and_extract_backup(archive_path: Path, destination_data: Path) -> dict:
+    """Validate archive paths, manifest, hashes and SQLite before touching live data."""
+    try:
+        with zipfile.ZipFile(archive_path, "r") as archive:
+            infos = archive.infolist()
+            if not infos or len(infos) > MAX_BACKUP_FILES + 1:
+                raise ValueError("В архиве недопустимое количество файлов")
+            names = [info.filename for info in infos]
+            if len(names) != len(set(names)):
+                raise ValueError("В архиве обнаружены повторяющиеся имена файлов")
+            if "manifest.json" not in names:
+                raise ValueError("Это не резервная копия My DashboardKDV: отсутствует manifest.json")
+            manifest_info = archive.getinfo("manifest.json")
+            if manifest_info.file_size > 4 * 1024 * 1024:
+                raise ValueError("Манифест резервной копии слишком большой")
+            manifest = json.loads(archive.read(manifest_info).decode("utf-8"))
+            if not isinstance(manifest, dict):
+                raise ValueError("Манифест резервной копии должен быть JSON-объектом")
+            if manifest.get("format") != BACKUP_FORMAT or int(manifest.get("format_version", 0)) != BACKUP_FORMAT_VERSION:
+                raise ValueError("Формат или версия резервной копии не поддерживается")
+            manifest_files = manifest.get("files")
+            if not isinstance(manifest_files, list) or len(manifest_files) > MAX_BACKUP_FILES:
+                raise ValueError("Некорректный список файлов в манифесте")
+
+            if int(manifest.get("file_count", -1)) != len(manifest_files):
+                raise ValueError("Количество файлов в манифесте не совпадает")
+            listed = {}
+            for entry in manifest_files:
+                if not isinstance(entry, dict):
+                    raise ValueError("Некорректная запись файла в манифесте")
+                filename = entry.get("path")
+                if not isinstance(filename, str) or not filename.startswith("data/") or filename == "data/":
+                    raise ValueError("В архиве найден недопустимый путь")
+                if "\\" in filename or any(part in {"", ".", ".."} for part in filename.split("/")):
+                    raise ValueError("В архиве найден недопустимый путь")
+                pure = PurePosixPath(filename)
+                if pure.is_absolute() or any(part in {"", ".", ".."} for part in pure.parts):
+                    raise ValueError("В архиве найден опасный путь")
+                if len(pure.parts) > 1 and pure.parts[1] == "backups":
+                    raise ValueError("Архив не должен содержать вложенную папку backups")
+                if filename in listed:
+                    raise ValueError("В манифесте есть повторяющиеся файлы")
+                try:
+                    size = int(entry.get("size", -1))
+                except (TypeError, ValueError):
+                    size = -1
+                if size < 0:
+                    raise ValueError("Некорректный размер файла в манифесте")
+                digest = entry.get("sha256")
+                if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+                    raise ValueError("Некорректная контрольная сумма файла")
+                listed[filename] = {"size": size, "sha256": digest}
+
+            zip_files = {}
+            total_size = 0
+            for info in infos:
+                filename = info.filename
+                if filename == "manifest.json":
+                    continue
+                if info.is_dir() or "\\" in filename or any(part in {"", ".", ".."} for part in filename.split("/")):
+                    raise ValueError("В архиве найден недопустимый путь")
+                pure = PurePosixPath(filename)
+                if pure.is_absolute() or any(part in {"", ".", ".."} for part in pure.parts):
+                    raise ValueError("В архиве найден опасный путь")
+                if not filename.startswith("data/") or len(pure.parts) < 2:
+                    raise ValueError("Архив содержит файлы вне каталога data")
+                if pure.parts[1] == "backups":
+                    raise ValueError("Архив не должен содержать вложенную папку backups")
+                mode = (info.external_attr >> 16) & 0xFFFF
+                if stat.S_ISLNK(mode):
+                    raise ValueError("Символические ссылки в резервной копии запрещены")
+                if info.flag_bits & 0x1:
+                    raise ValueError("Зашифрованные ZIP-архивы не поддерживаются")
+                total_size += info.file_size
+                if info.file_size < 0 or total_size > MAX_BACKUP_UNCOMPRESSED_BYTES:
+                    raise ValueError("Размер распакованных данных превышает 2 ГБ")
+                zip_files[filename] = info
+
+            if set(zip_files) != set(listed):
+                raise ValueError("Список файлов в архиве не совпадает с манифестом")
+            if "data/dashboard.db" not in zip_files:
+                raise ValueError("В резервной копии отсутствует база dashboard.db")
+            if total_size != int(manifest.get("total_uncompressed_bytes", -1)):
+                raise ValueError("Общий размер данных не совпадает с манифестом")
+
+            destination_data.mkdir(parents=True, exist_ok=True)
+            actual_total = 0
+            for filename, info in zip_files.items():
+                target = destination_data.joinpath(*PurePosixPath(filename).parts[1:])
+                target.parent.mkdir(parents=True, exist_ok=True)
+                digest = hashlib.sha256()
+                written = 0
+                with archive.open(info, "r") as source, target.open("wb") as output:
+                    while True:
+                        chunk = source.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        written += len(chunk)
+                        actual_total += len(chunk)
+                        if written > listed[filename]["size"] or actual_total > MAX_BACKUP_UNCOMPRESSED_BYTES:
+                            raise ValueError("Размер распакованных данных превышает лимит")
+                        digest.update(chunk)
+                        output.write(chunk)
+                if written != listed[filename]["size"] or digest.hexdigest() != listed[filename]["sha256"]:
+                    raise ValueError(f"Контрольная сумма не совпала: {PurePosixPath(filename).name}")
+
+            database = destination_data / "dashboard.db"
+            connection = sqlite3.connect(str(database), timeout=15)
+            try:
+                check = connection.execute("PRAGMA integrity_check").fetchone()
+                if not check or check[0] != "ok":
+                    raise ValueError("База данных в резервной копии повреждена")
+                tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                if not {"apps", "categories"}.issubset(tables):
+                    raise ValueError("В резервной копии нет таблиц приложений и категорий")
+            finally:
+                connection.close()
+            return manifest
+    except zipfile.BadZipFile as exc:
+        raise ValueError("Файл не является корректным ZIP-архивом") from exc
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError("Манифест резервной копии повреждён") from exc
+
+
+def _apply_backup_data(staged_data: Path) -> None:
+    """Replace persistent data in-place while retaining the backups directory."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
+    for child in list(DATA_DIR.iterdir()):
+        if child.name == "backups":
+            continue
+        if child.is_symlink() or not child.is_dir():
+            child.unlink(missing_ok=True)
+        else:
+            shutil.rmtree(child)
+
+    database_source = staged_data / "dashboard.db"
+    if not database_source.is_file():
+        raise RuntimeError("В проверенной резервной копии нет dashboard.db")
+    for child in staged_data.iterdir():
+        if child.name == "dashboard.db":
+            continue
+        target = DATA_DIR / child.name
+        if child.is_dir():
+            shutil.copytree(child, target, symlinks=False)
+        elif child.is_file():
+            shutil.copy2(child, target)
+
+    temporary_db = DATA_DIR / f".dashboard.db.restore-{uuid.uuid4().hex}.tmp"
+    try:
+        shutil.copy2(database_source, temporary_db)
+        with sqlite3.connect(str(temporary_db), timeout=15) as connection:
+            check = connection.execute("PRAGMA integrity_check").fetchone()
+            if not check or check[0] != "ok":
+                raise RuntimeError("База данных не прошла проверку целостности")
+        os.replace(temporary_db, DB_PATH)
+    finally:
+        temporary_db.unlink(missing_ok=True)
+
+
+@app.post("/api/backups")
+def create_full_backup():
+    """Create and persist a full ZIP backup; retain the newest five copies."""
+    try:
+        with BACKUP_OPERATION_LOCK:
+            result = _create_stored_backup("manual")
+            result["backups"] = len([p for p in BACKUPS_DIR.iterdir() if _is_managed_backup(p)])
+            return {"ok": True, **result}
+    except Exception as exc:
+        raise HTTPException(500, f"Не удалось создать резервную копию: {exc}") from exc
+
+
+@app.get("/api/backups")
+def list_full_backups():
+    BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
+    backups = []
+    for path in sorted((p for p in BACKUPS_DIR.iterdir() if _is_managed_backup(p)), key=lambda p: p.stat().st_mtime, reverse=True):
+        stat_result = path.stat()
+        match = re.search(r"-(manual|before-restore)\.zip$", path.name)
+        backups.append({
+            "filename": path.name,
+            "size_bytes": stat_result.st_size,
+            "created_at": datetime.fromtimestamp(stat_result.st_mtime, timezone.utc).isoformat(),
+            "backup_type": match.group(1) if match else "manual",
+        })
+    return {"backups": backups, "retention_count": BACKUP_RETENTION_COUNT}
+
+
+@app.get("/api/backups/{filename}/download")
+def download_full_backup(filename: str):
+    if not BACKUP_FILENAME_RE.fullmatch(filename):
+        raise HTTPException(400, "Недопустимое имя резервной копии")
+    path = BACKUPS_DIR / filename
+    if not _is_managed_backup(path):
+        raise HTTPException(404, "Резервная копия не найдена")
+    return FileResponse(path, media_type="application/zip", filename=filename)
+
+
+@app.post("/api/backups/restore")
+def restore_full_backup(file: UploadFile = File(...)):
+    filename = (file.filename or "backup.zip").replace("\\", "/").split("/")[-1]
+    if not filename.lower().endswith(".zip"):
+        file.file.close()
+        raise HTTPException(400, "Выберите ZIP-архив резервной копии")
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="mdkdv-restore-") as temporary:
+            temporary_root = Path(temporary)
+            upload_path = temporary_root / "uploaded-backup.zip"
+            total_uploaded = 0
+            with upload_path.open("wb") as output:
+                while True:
+                    chunk = file.file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total_uploaded += len(chunk)
+                    if total_uploaded > MAX_BACKUP_UPLOAD_BYTES:
+                        raise HTTPException(413, "Архив больше 2 ГБ")
+                    output.write(chunk)
+
+            staged_data = temporary_root / "restored-data"
+            with BACKUP_OPERATION_LOCK:
+                try:
+                    manifest = _validate_and_extract_backup(upload_path, staged_data)
+                except ValueError as exc:
+                    raise HTTPException(400, f"Резервная копия не прошла проверку: {exc}") from exc
+
+                before_restore = _create_stored_backup("before-restore")
+                try:
+                    _apply_backup_data(staged_data)
+                except Exception as exc:
+                    # Restore from the just-created safety copy if applying the new data failed.
+                    rollback_root = temporary_root / "rollback-data"
+                    try:
+                        _validate_and_extract_backup(BACKUPS_DIR / before_restore["filename"], rollback_root)
+                        _apply_backup_data(rollback_root)
+                    except Exception as rollback_exc:
+                        raise HTTPException(500, f"Восстановление не завершилось. Сохранена резервная копия текущих данных: {before_restore['filename']}. Автоматический откат также не удался: {rollback_exc}") from exc
+                    raise HTTPException(500, f"Восстановление отменено; текущие данные возвращены из резервной копии {before_restore['filename']}. Причина: {exc}") from exc
+
+                _prune_backups()
+                return {
+                    "ok": True,
+                    "app_version": manifest.get("app_version", "unknown"),
+                    "restored_files": int(manifest.get("file_count", 0)),
+                    "safety_backup": before_restore["filename"],
+                    "message": "Данные восстановлены. Обновите страницу Dashboard.",
+                }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, f"Не удалось восстановить резервную копию: {exc}") from exc
+    finally:
+        file.file.close()

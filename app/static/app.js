@@ -1294,6 +1294,7 @@ function switchSettingsGroup(group){
   localStorage.setItem('mdkdv-settings-group',active);
   document.querySelectorAll('[data-settings-group]').forEach(btn=>btn.classList.toggle('active',btn.dataset.settingsGroup===active));
   document.querySelectorAll('[data-settings-panel]').forEach(panel=>panel.classList.toggle('active',panel.dataset.settingsPanel===active));
+  if(active==='data') loadBackupList();
 }
 
 function restoreSettingsGroup(){
@@ -1339,6 +1340,95 @@ async function importSettingsFile(event){
     await loadAppearanceConfig();
     alert(`Настройки импортированы: ${result.categories} категорий, ${result.apps} приложений.`);
   }catch(e){alert(`Не удалось импортировать настройки: ${e.message}`)}finally{event.target.value=''}
+}
+
+
+function formatBackupBytes(value){
+  const bytes=Math.max(0,Number(value)||0);
+  if(bytes<1024)return `${bytes} Б`;
+  if(bytes<1024*1024)return `${(bytes/1024).toFixed(1)} КБ`;
+  if(bytes<1024*1024*1024)return `${(bytes/(1024*1024)).toFixed(1)} МБ`;
+  return `${(bytes/(1024*1024*1024)).toFixed(2)} ГБ`;
+}
+
+async function loadBackupList(){
+  const list=document.getElementById('fullBackupList');
+  if(!list)return;
+  list.innerHTML='<div class="local-services-empty">Загружаем резервные копии…</div>';
+  try{
+    const response=await fetch('/api/backups',{cache:'no-store'});
+    const data=await response.json();
+    if(!response.ok)throw new Error(data.detail||'Не удалось получить список');
+    const backups=Array.isArray(data.backups)?data.backups:[];
+    if(!backups.length){list.innerHTML='<div class="local-services-empty">Резервных копий пока нет. Нажмите «Создать полную копию».</div>';return;}
+    list.innerHTML=backups.map(item=>{
+      const date=item.created_at?new Date(item.created_at).toLocaleString():'Дата неизвестна';
+      const kind=item.backup_type==='before-restore'?'Перед восстановлением':'Создана вручную';
+      const safeName=escapeHtml(item.filename||'backup.zip');
+      return `<div class="full-backup-item"><div class="full-backup-info"><strong>🗄 ${safeName}</strong><span>${escapeHtml(date)} · ${formatBackupBytes(item.size_bytes)} · ${kind}</span></div><button type="button" onclick="downloadFullBackup(${JSON.stringify(item.filename)})">⬇ Скачать</button></div>`;
+    }).join('');
+  }catch(error){
+    list.innerHTML=`<div class="local-services-empty">Не удалось загрузить список резервных копий: ${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function downloadFullBackup(filename){
+  const link=document.createElement('a');
+  link.href=`/api/backups/${encodeURIComponent(filename)}/download`;
+  link.download=filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+async function createFullBackup(){
+  const button=document.getElementById('createFullBackupButton');
+  const status=document.getElementById('backupOperationStatus');
+  if(button)button.disabled=true;
+  if(status)status.textContent='Создаём согласованную копию базы и файлов…';
+  try{
+    const response=await fetch('/api/backups',{method:'POST'});
+    const result=await response.json();
+    if(!response.ok)throw new Error(result.detail||'Ошибка создания резервной копии');
+    if(status)status.textContent=`Копия создана: ${result.filename} (${formatBackupBytes(result.size_bytes)}). Сохраняется до пяти последних копий.`;
+    await loadBackupList();
+    downloadFullBackup(result.filename);
+  }catch(error){
+    if(status)status.textContent=`Не удалось создать резервную копию: ${error.message}`;
+  }finally{
+    if(button)button.disabled=false;
+  }
+}
+
+async function restoreFullBackup(event){
+  const input=event.target;
+  const file=input.files?.[0];
+  const status=document.getElementById('backupOperationStatus');
+  if(!file)return;
+  if(!file.name.toLowerCase().endsWith('.zip')){
+    alert('Выберите ZIP-архив полной резервной копии My DashboardKDV.');
+    input.value='';
+    return;
+  }
+  const accepted=confirm('Восстановить Dashboard из ZIP? Все текущие постоянные данные будут заменены содержимым архива. Перед заменой сервер автоматически создаст и сохранит резервную копию текущего состояния. Полный ZIP может содержать API-ключ Emby. Продолжить?');
+  if(!accepted){input.value='';return;}
+  if(status)status.textContent='Проверяем архив и создаём защитную копию текущих данных…';
+  try{
+    const form=new FormData();
+    form.append('file',file,file.name);
+    const response=await fetch('/api/backups/restore',{method:'POST',body:form});
+    const result=await response.json();
+    if(!response.ok)throw new Error(result.detail||'Не удалось восстановить копию');
+    if(status)status.textContent=`Восстановление завершено. Защитная копия текущего состояния: ${result.safety_backup}. Перезагружаем панель…`;
+    alert(`Данные восстановлены.\nФайлов: ${result.restored_files}\nЗащитная копия: ${result.safety_backup}\n\nDashboard сейчас перезагрузится.`);
+    window.location.reload();
+  }catch(error){
+    if(status)status.textContent=`Ошибка восстановления: ${error.message}`;
+    alert(`Не удалось восстановить резервную копию:\n${error.message}`);
+    await loadBackupList();
+  }finally{
+    input.value='';
+  }
 }
 
 function escapeHtml(v){return String(v??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;')}

@@ -931,3 +931,20 @@ body.embedded-open { overflow:hidden; }
 .settings-group.active{display:block}
 .settings-group>.settings-section:first-child{margin-top:0}
 @media(max-width:650px){.settings-tabs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.settings-tab{width:100%}}
+
+
+/* My DashboardKDV 2.14 — full backup management */
+.full-backup-list{display:flex;flex-direction:column;gap:8px;margin-top:12px;max-height:360px;overflow:auto}
+.full-backup-item{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 12px;border:1px solid var(--line);border-radius:12px;background:var(--panel2)}
+.full-backup-info{display:flex;flex-direction:column;gap:4px;min-width:0}
+.full-backup-info strong{font-size:12px;overflow-wrap:anywhere}
+.full-backup-info span{font-size:11px;color:var(--muted)}
+.backup-actions{align-items:center}
+.backup-actions button:disabled{opacity:.6;cursor:wait}
+@media(max-width:620px){.full-backup-item{align-items:stretch;flex-direction:column}.full-backup-item button{width:100%}}
+
+.settings-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0}
+.file-button{position:relative;display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:38px;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--button);color:var(--text);font:inherit;font-size:12px;font-weight:650;cursor:pointer}
+.file-button:hover{border-color:rgba(124,140,255,.55)}
+.file-button input[type="file"]{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;pointer-events:none}
+@media(max-width:620px){.settings-actions{align-items:stretch;flex-direction:column}.settings-actions>button,.settings-actions>.file-button{width:100%}}

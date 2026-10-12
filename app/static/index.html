@@ -12,7 +12,7 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/static/pwa/icon-192.png">
   <link rel="apple-touch-icon" href="/static/pwa/icon-192.png">
   <title>My DashboardKDV</title>
-  <link rel="stylesheet" href="/static/style.css?v=54">
+  <link rel="stylesheet" href="/static/style.css?v=55">
 </head>
 <body>
 <div class="background"><div id="backgroundImage" class="background-image"></div></div>
@@ -290,15 +290,29 @@
 
     <section class="settings-group" data-settings-panel="data">
       <div class="settings-section">
-        <h3>💾 Резервная копия и перенос</h3>
-        <p class="settings-note compact">Полный экспорт сохраняет приложения, категории, группы, порядок, оформление плиток, фон, локальные иконки и изображения плиток.</p>
+        <h3>🗄 Полная резервная копия (ZIP)</h3>
+        <p class="settings-note compact">Архив содержит базу SQLite, приложения, категории, группы, оформление, настройки, иконки, фон панели и фоны плиток. Перед восстановлением Dashboard автоматически создаёт защитную копию текущих данных.</p>
+        <div class="settings-actions backup-actions">
+          <button id="createFullBackupButton" class="primary" type="button" onclick="createFullBackup()">🗄 Создать полную копию</button>
+          <label class="file-button">♻ Восстановить из ZIP
+            <input id="backupRestoreFile" type="file" accept=".zip,application/zip" onchange="restoreFullBackup(event)">
+          </label>
+          <button type="button" onclick="loadBackupList()">↻ Обновить список</button>
+        </div>
+        <div id="backupOperationStatus" class="settings-note compact" aria-live="polite"></div>
+        <div id="fullBackupList" class="full-backup-list"><div class="local-services-empty">Загружаем резервные копии…</div></div>
+        <div class="settings-note compact">На сервере хранится не более 5 последних ZIP-копий, включая автоматическую копию перед восстановлением. Архив полной копии содержит всю базу данных, в том числе API-ключ Emby. Храните его в приватном месте.</div>
+      </div>
+      <div class="settings-section">
+        <h3>📄 Экспорт настроек (JSON)</h3>
+        <p class="settings-note compact">JSON удобен для переноса настроек панели и изображений без резервирования всей базы.</p>
         <div class="settings-actions">
-          <button class="primary" type="button" onclick="exportSettings()">💾 Экспортировать настройки</button>
-          <label class="file-button">📥 Импортировать настройки
+          <button type="button" onclick="exportSettings()">📄 Экспортировать настройки</button>
+          <label class="file-button">📥 Импортировать настройки JSON
             <input id="settingsFile" type="file" accept="application/json,.json" onchange="importSettingsFile(event)">
           </label>
         </div>
-        <div class="settings-note compact">API-ключ Emby намеренно не экспортируется.</div>
+        <div class="settings-note compact">API-ключ Emby намеренно не включается в JSON-экспорт.</div>
       </div>
     </section>
 
@@ -338,7 +352,7 @@
       </div>
     </section>
 
-    <div class="settings-warning">⚠ Импорт заменит текущие приложения, категории и группы данными из файла. API ключ Emby намеренно не экспортируется.</div>
+    <div class="settings-warning">⚠ Импорт JSON заменяет приложения, категории и группы. Восстановление ZIP заменяет всё постоянное содержимое data/. Перед восстановлением автоматически создаётся защитная копия; ZIP содержит API-ключ Emby.</div>
   </div>
 </div>
 
@@ -450,7 +464,7 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=54"></script>
+<script src="/static/app.js?v=55"></script>
 
 </body>
 </html>
