@@ -7,6 +7,8 @@ let currentTheme = localStorage.getItem("mdkdv-theme") === "light" ? "light" : "
 let fixedCategory = "";
 let deferredPwaInstallPrompt = null;
 let selectedAppsForExport = new Set();
+let bulkSelectMode = false;
+let bulkSelectedAppIds = new Set();
 
 
 
@@ -335,6 +337,8 @@ async function loadData(){
     tile_bg_value: String(a.tile_bg_value || '').trim(),
     tile_bg_scale: Math.round(clampNumber(a.tile_bg_scale,50,200,100))
   })) : [];
+  const currentAppIds = new Set(apps.map(app => Number(app.id)));
+  bulkSelectedAppIds.forEach(id => { if (!currentAppIds.has(Number(id))) bulkSelectedAppIds.delete(id); });
   if(fixedCategory){
     if(fixedCategory==='all') selectedCategory='all';
     else if(fixedCategory==='favorites') selectedCategory='favorites';
@@ -349,6 +353,8 @@ async function loadData(){
   fillCategorySelect();
   fillGroupSelect();
   populateFixedCategorySelect();
+  populateBulkCategorySelect();
+  updateBulkControls();
 }
 
 function renderCategories(){
@@ -396,7 +402,7 @@ function renderApps(){
     ? draftAppOrder.map(id=>apps.find(a=>a.id===id)).filter(Boolean).filter(a=>filtered.some(f=>f.id===a.id))
     : filtered;
 
-  if(!orderedFiltered.length){d.innerHTML='<div class="empty">В этой группе пока нет приложений</div>';return;}
+  if(!orderedFiltered.length){d.innerHTML='<div class="empty">В этой группе пока нет приложений</div>';updateBulkControls();return;}
 
   const section=(title,list)=>`<div class="group"><div class="group-title">${escapeHtml(title)}</div><div class="grid ${panelEditMode?'edit-grid':''}">${list.map(appCard).join('')}</div></div>`;
   if(typeof selectedCategory==='number'){
@@ -413,6 +419,7 @@ function renderApps(){
   }else{
     d.innerHTML=`<div class="group"><div class="group-title">${escapeHtml(currentTitle())}</div><div class="grid ${panelEditMode?'edit-grid':''}">${orderedFiltered.map(appCard).join('')}</div></div>`;
   }
+  updateBulkControls();
 }
 
 function currentTitle(){if(selectedCategory==='all')return'Все приложения';if(selectedCategory==='favorites')return'Избранное';if(selectedGroup!=='all')return groups.find(g=>g.id===selectedGroup)?.name||'';return categories.find(c=>c.id===selectedCategory)?.name||''}
@@ -481,15 +488,143 @@ function appCard(a){
   const openBadge=a.open_mode==='embedded' ? '<span class="app-open-badge" title="Открывается внутри Dashboard">▣</span>' : '';
   const bgClass=hasImageBg?' tile-image-background':'';
   const tileBackground=hasImageBg ? `<img class="tile-background-layer" src="${escapeAttr(bgValue)}" alt="" aria-hidden="true" loading="eager" decoding="async" style="width:${bgScale}%;height:${bgScale}%;" onerror="this.style.display='none'">` : '';
-  return `<article class="app-card size-${size}${bgClass}${panelEditMode?' order-editing':''}" data-app-id="${a.id}" ${dragAttrs} ${tileStyle(a)} onclick="openApp(${a.id})">
+  const bulkSelected=bulkSelectedAppIds.has(Number(a.id));
+  const bulkClasses=`${bulkSelectMode?' bulk-selecting':''}${bulkSelected?' bulk-selected':''}`;
+  const bulkSelector=bulkSelectMode?`<button type="button" class="bulk-card-select ${bulkSelected?'selected':''}" aria-label="${bulkSelected?'Снять выбор':'Выбрать'}: ${escapeAttr(a.name)}" aria-pressed="${bulkSelected?'true':'false'}" onclick="event.stopPropagation();toggleBulkAppSelection(${Number(a.id)})">${bulkSelected?'✓':'＋'}</button>`:'';
+  const cardActions=bulkSelectMode?'':`<div class="actions" onclick="event.stopPropagation()">${moveActions}${editorActions}<button onclick="editApp(${a.id})">Изменить</button><button onclick="deleteApp(${a.id})">Удалить</button></div>`;
+  return `<article class="app-card size-${size}${bgClass}${panelEditMode?' order-editing':''}${bulkClasses}" data-app-id="${a.id}" ${dragAttrs} ${tileStyle(a)} onclick="handleAppCardClick(event,${a.id})">
     ${tileBackground}
+    ${bulkSelector}
     ${dragHandle}
     ${a.favorite?'<div class="favorite">⭐</div>':''}${openBadge}
     <div class="icon" style="width:${clampNumber(a.tile_icon_size,24,96,48)}px;height:${clampNumber(a.tile_icon_size,24,96,48)}px;font-size:${Math.max(18,Math.round(clampNumber(a.tile_icon_size,24,96,48)*.52))}px;"><div class="app-card-icon-wrap">${iconHtml(a.icon,'app-card-icon')}</div></div>
     <div class="app-name" style="font-size:${clampNumber(a.tile_title_size,12,28,17)}px;">${escapeHtml(a.name)}</div>
     ${details.join('')}
-    <div class="actions" onclick="event.stopPropagation()">${moveActions}${editorActions}<button onclick="editApp(${a.id})">Изменить</button><button onclick="deleteApp(${a.id})">Удалить</button></div>
+    ${cardActions}
   </article>`;
+}
+
+function toggleBulkSelectMode(force){
+  const next=typeof force==='boolean'?force:!bulkSelectMode;
+  if(next===bulkSelectMode)return;
+  if(next&&panelEditMode)cancelPanelEditMode();
+  bulkSelectMode=next;
+  if(!bulkSelectMode)bulkSelectedAppIds.clear();
+  const bar=document.getElementById('bulkActionsBar');
+  if(bar)bar.classList.toggle('hidden',!bulkSelectMode);
+  const button=document.getElementById('bulkSelectButton');
+  if(button){button.textContent=bulkSelectMode?'☑ Выбор включён':'☑ Массово';button.classList.toggle('primary',bulkSelectMode);}
+  const message=document.getElementById('bulkActionMessage');
+  if(message)message.textContent='';
+  renderApps();
+}
+
+function handleAppCardClick(event,id){
+  if(bulkSelectMode){toggleBulkAppSelection(id);return;}
+  openApp(id);
+}
+
+function toggleBulkAppSelection(id){
+  const appId=Number(id);
+  if(!Number.isInteger(appId)||!apps.some(app=>Number(app.id)===appId))return;
+  if(bulkSelectedAppIds.has(appId))bulkSelectedAppIds.delete(appId);else bulkSelectedAppIds.add(appId);
+  renderApps();
+}
+
+function getVisibleBulkAppIds(){
+  return [...document.querySelectorAll('#dashboard .app-card')].map(card=>Number(card.dataset.appId)).filter(Number.isInteger);
+}
+
+function toggleBulkSelectVisible(checked){
+  const visibleIds=getVisibleBulkAppIds();
+  visibleIds.forEach(id=>{if(checked)bulkSelectedAppIds.add(id);else bulkSelectedAppIds.delete(id);});
+  renderApps();
+}
+
+function clearBulkSelection(){
+  bulkSelectedAppIds.clear();
+  const message=document.getElementById('bulkActionMessage');
+  if(message)message.textContent='Выбор снят.';
+  renderApps();
+}
+
+function populateBulkCategorySelect(){
+  const select=document.getElementById('bulkCategorySelect');
+  if(!select)return;
+  const current=select.value;
+  select.innerHTML='<option value="">Выбрать категорию…</option>'+categories.map(category=>`<option value="${Number(category.id)}">${escapeHtml(category.icon||'📁')} ${escapeHtml(category.name)}</option>`).join('');
+  if(categories.some(category=>String(category.id)===current))select.value=current;
+}
+
+function updateBulkControls(){
+  const bar=document.getElementById('bulkActionsBar');
+  if(bar)bar.classList.toggle('hidden',!bulkSelectMode);
+  const selectedCount=bulkSelectedAppIds.size;
+  const counter=document.getElementById('bulkSelectionCount');
+  if(counter)counter.textContent=`Выбрано: ${selectedCount}`;
+  const visibleIds=getVisibleBulkAppIds();
+  const visibleSelected=visibleIds.filter(id=>bulkSelectedAppIds.has(id)).length;
+  const selectVisible=document.getElementById('bulkSelectVisible');
+  if(selectVisible){selectVisible.checked=visibleIds.length>0&&visibleSelected===visibleIds.length;selectVisible.indeterminate=visibleSelected>0&&visibleSelected<visibleIds.length;selectVisible.disabled=visibleIds.length===0;}
+  for(const id of ['bulkMoveButton','bulkResizeButton','bulkDeleteButton']){
+    const button=document.getElementById(id);if(button)button.disabled=selectedCount===0;
+  }
+  const bulkButton=document.getElementById('bulkSelectButton');
+  if(bulkButton){bulkButton.textContent=bulkSelectMode?'☑ Выбор включён':'☑ Массово';bulkButton.classList.toggle('primary',bulkSelectMode);}
+}
+
+function setBulkActionMessage(message,isError=false){
+  const target=document.getElementById('bulkActionMessage');
+  if(target){target.textContent=message;target.classList.toggle('error',!!isError);}
+}
+
+async function bulkMoveSelectedApps(){
+  const ids=[...bulkSelectedAppIds];
+  if(!ids.length){setBulkActionMessage('Сначала выбери приложения.',true);return;}
+  const categoryId=Number(document.getElementById('bulkCategorySelect')?.value||0);
+  const category=categories.find(item=>Number(item.id)===categoryId);
+  if(!category){setBulkActionMessage('Выбери целевую категорию.',true);return;}
+  if(!confirm(`Перенести ${ids.length} приложений в категорию «${category.name}»? Группы будут сброшены только у приложений, которые переходят из другой категории.`))return;
+  try{
+    const response=await fetch('/api/apps/bulk-update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids,category_id:categoryId})});
+    const result=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error(result.detail||'Не удалось перенести приложения');
+    bulkSelectedAppIds.clear();
+    await loadData();
+    setBulkActionMessage(`Готово: перенесено приложений — ${result.count||ids.length}.`);
+  }catch(error){setBulkActionMessage(error.message||'Ошибка переноса.',true);}
+}
+
+async function bulkResizeSelectedApps(){
+  const ids=[...bulkSelectedAppIds];
+  if(!ids.length){setBulkActionMessage('Сначала выбери приложения.',true);return;}
+  const size=String(document.getElementById('bulkSizeSelect')?.value||'medium');
+  const names={mini:'мини',small:'маленький',medium:'стандартный',wide:'широкий',tall:'высокий',large:'большой',xl:'XL',hero:'герой'};
+  try{
+    const response=await fetch('/api/apps/bulk-update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids,size})});
+    const result=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error(result.detail||'Не удалось изменить размер плиток');
+    bulkSelectedAppIds.clear();
+    await loadData();
+    setBulkActionMessage(`Готово: обновлён размер ${result.count||ids.length} плиток — ${names[size]||size}.`);
+  }catch(error){setBulkActionMessage(error.message||'Ошибка изменения размера.',true);}
+}
+
+async function bulkDeleteSelectedApps(){
+  const ids=[...bulkSelectedAppIds];
+  if(!ids.length){setBulkActionMessage('Сначала выбери приложения.',true);return;}
+  const names=ids.map(id=>apps.find(app=>Number(app.id)===id)?.name).filter(Boolean);
+  const preview=names.slice(0,5).map(name=>`• ${name}`).join('\n');
+  const suffix=names.length>5?`\n…и ещё ${names.length-5}`:'';
+  if(!confirm(`Удалить ${ids.length} выбранных приложений? Это действие нельзя отменить.\n\n${preview}${suffix}`))return;
+  try{
+    const response=await fetch('/api/apps/bulk-delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});
+    const result=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error(result.detail||'Не удалось удалить приложения');
+    bulkSelectedAppIds.clear();
+    await loadData();
+    setBulkActionMessage(`Удалено приложений: ${result.count||ids.length}.`);
+  }catch(error){setBulkActionMessage(error.message||'Ошибка удаления.',true);}
 }
 
 function openApp(id){
@@ -565,6 +700,7 @@ function handleEmbeddedEscape(event){
 
 
 function togglePanelEditMode(force){
+  if(bulkSelectMode)toggleBulkSelectMode(false);
   if(typeof force==='boolean' && force===false){
     cancelPanelEditMode();
     return;

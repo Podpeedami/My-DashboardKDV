@@ -12,7 +12,7 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/static/pwa/icon-192.png">
   <link rel="apple-touch-icon" href="/static/pwa/icon-192.png">
   <title>My DashboardKDV</title>
-  <link rel="stylesheet" href="/static/style.css?v=57">
+  <link rel="stylesheet" href="/static/style.css?v=58">
 </head>
 <body>
 <div class="background"><div id="backgroundImage" class="background-image"></div></div>
@@ -23,7 +23,7 @@
       <div class="brand">My DashboardKDV</div>
       <h1>Все приложения в одном месте</h1>
     </div>
-    <div class="header-actions"><button id="themeToggle" type="button">☀️ Светлая</button><button id="settingsButton" type="button">⚙ Настройки</button><button id="pwaInstallButton" type="button" class="hidden">📲 Установить</button><button id="panelEditButton" type="button">✏️ Редактировать</button><button id="panelEditCancel" type="button" class="hidden">✖ Отмена</button><button type="button" onclick="openServiceTemplatesModal()">📦 Шаблоны</button><button class="primary" onclick="openAppModal()">＋ Приложение</button></div>
+    <div class="header-actions"><button id="themeToggle" type="button">☀️ Светлая</button><button id="settingsButton" type="button">⚙ Настройки</button><button id="pwaInstallButton" type="button" class="hidden">📲 Установить</button><button id="bulkSelectButton" type="button" onclick="toggleBulkSelectMode()">☑ Массово</button><button id="panelEditButton" type="button">✏️ Редактировать</button><button id="panelEditCancel" type="button" class="hidden">✖ Отмена</button><button type="button" onclick="openServiceTemplatesModal()">📦 Шаблоны</button><button class="primary" onclick="openAppModal()">＋ Приложение</button></div>
   </header>
 
   <section class="toolbar">
@@ -43,6 +43,28 @@
   </section>
 
   <div id="groupsBar" class="groups-bar hidden"></div>
+
+  <section id="bulkActionsBar" class="bulk-actions-bar hidden" aria-label="Массовое управление приложениями">
+    <div class="bulk-actions-heading">
+      <strong id="bulkSelectionCount">Выбрано: 0</strong>
+      <span>Действия применяются только к отмеченным карточкам.</span>
+    </div>
+    <label class="bulk-select-visible"><input id="bulkSelectVisible" type="checkbox" onchange="toggleBulkSelectVisible(this.checked)"> Выбрать видимые</label>
+    <label class="bulk-field">Категория
+      <select id="bulkCategorySelect" aria-label="Категория для выбранных приложений"></select>
+    </label>
+    <button id="bulkMoveButton" type="button" onclick="bulkMoveSelectedApps()" disabled>Перенести</button>
+    <label class="bulk-field">Размер плитки
+      <select id="bulkSizeSelect" aria-label="Размер выбранных плиток">
+        <option value="mini">Мини</option><option value="small">Маленькая</option><option value="medium" selected>Стандартная</option><option value="wide">Широкая</option><option value="tall">Высокая</option><option value="large">Большая</option><option value="xl">XL</option><option value="hero">Герой</option>
+      </select>
+    </label>
+    <button id="bulkResizeButton" type="button" onclick="bulkResizeSelectedApps()" disabled>Применить размер</button>
+    <button id="bulkDeleteButton" class="danger" type="button" onclick="bulkDeleteSelectedApps()" disabled>Удалить выбранные</button>
+    <button type="button" onclick="clearBulkSelection()">Снять выбор</button>
+    <button type="button" onclick="toggleBulkSelectMode(false)">Завершить</button>
+    <div id="bulkActionMessage" class="bulk-action-message" aria-live="polite"></div>
+  </section>
 
   <section id="dashboard"></section>
 
@@ -507,7 +529,7 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=57"></script>
+<script src="/static/app.js?v=58"></script>
 
 </body>
 </html>

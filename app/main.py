@@ -441,6 +441,16 @@ class ReorderApps(BaseModel):
     ids: list[int] = Field(default_factory=list)
 
 
+class BulkAppsUpdate(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=500)
+    category_id: Optional[int] = None
+    size: Optional[Literal['mini', 'small', 'medium', 'wide', 'tall', 'large', 'xl', 'hero']] = None
+
+
+class BulkAppsDelete(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=500)
+
+
 class DashboardSettings(BaseModel):
     version: int = 1
     app_name: str = "My DashboardKDV"
@@ -1087,6 +1097,52 @@ def delete_app(app_id: int):
         if not conn.execute("DELETE FROM apps WHERE id=?", (app_id,)).rowcount:
             raise HTTPException(404, "Приложение не найдено")
     return {"ok": True}
+
+
+@app.post("/api/apps/bulk-update")
+def bulk_update_apps(payload: BulkAppsUpdate):
+    """Apply one supported change to up to 500 selected apps in one transaction."""
+    if (payload.category_id is None) == (payload.size is None):
+        raise HTTPException(400, "Укажи либо новую категорию, либо размер плитки")
+
+    ids = list(dict.fromkeys(payload.ids))
+    placeholders = ",".join("?" for _ in ids)
+    with db() as conn:
+        rows = conn.execute(f"SELECT id FROM apps WHERE id IN ({placeholders})", ids).fetchall()
+        found = {int(row["id"]) for row in rows}
+        if found != set(ids):
+            raise HTTPException(404, "Одно или несколько выбранных приложений больше не существуют")
+
+        if payload.category_id is not None:
+            if not conn.execute("SELECT id FROM categories WHERE id=?", (payload.category_id,)).fetchone():
+                raise HTTPException(400, "Категория не найдена")
+            conn.execute(
+                f"UPDATE apps SET group_id=CASE WHEN category_id=? THEN group_id ELSE NULL END, category_id=? WHERE id IN ({placeholders})",
+                [payload.category_id, payload.category_id, *ids],
+            )
+            operation = "category"
+        else:
+            conn.execute(
+                f"UPDATE apps SET size=? WHERE id IN ({placeholders})",
+                [payload.size, *ids],
+            )
+            operation = "size"
+
+    return {"ok": True, "count": len(ids), "operation": operation}
+
+
+@app.post("/api/apps/bulk-delete")
+def bulk_delete_apps(payload: BulkAppsDelete):
+    """Delete selected apps atomically after the UI has confirmed the action."""
+    ids = list(dict.fromkeys(payload.ids))
+    placeholders = ",".join("?" for _ in ids)
+    with db() as conn:
+        rows = conn.execute(f"SELECT id FROM apps WHERE id IN ({placeholders})", ids).fetchall()
+        found = {int(row["id"]) for row in rows}
+        if found != set(ids):
+            raise HTTPException(404, "Одно или несколько выбранных приложений больше не существуют")
+        conn.execute(f"DELETE FROM apps WHERE id IN ({placeholders})", ids)
+    return {"ok": True, "count": len(ids)}
 
 
 # ---------------- Application status ----------------
