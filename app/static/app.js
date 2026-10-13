@@ -12,6 +12,32 @@ let bulkSelectedAppIds = new Set();
 
 
 
+let tileLayout = localStorage.getItem("mdkdv-tile-layout") === "vertical" ? "vertical" : "horizontal";
+
+function applyTileLayout(layout, persist = false){
+  tileLayout = layout === "vertical" ? "vertical" : "horizontal";
+  const dashboard = document.getElementById("dashboard");
+  if(dashboard){
+    dashboard.classList.toggle("layout-horizontal", tileLayout === "horizontal");
+    dashboard.classList.toggle("layout-vertical", tileLayout === "vertical");
+  }
+  const horizontal = document.getElementById("tileLayoutHorizontal");
+  const vertical = document.getElementById("tileLayoutVertical");
+  if(horizontal){
+    horizontal.classList.toggle("active", tileLayout === "horizontal");
+    horizontal.setAttribute("aria-pressed", tileLayout === "horizontal" ? "true" : "false");
+  }
+  if(vertical){
+    vertical.classList.toggle("active", tileLayout === "vertical");
+    vertical.setAttribute("aria-pressed", tileLayout === "vertical" ? "true" : "false");
+  }
+  if(persist) localStorage.setItem("mdkdv-tile-layout", tileLayout);
+}
+
+function setTileLayout(layout){
+  applyTileLayout(layout, true);
+}
+
 function applyTheme(theme, persist = true){
   currentTheme = theme === 'light' ? 'light' : 'dark';
   document.documentElement.dataset.theme = currentTheme;
@@ -1779,6 +1805,7 @@ function setupPwaInstall(){
 }
 
 document.addEventListener('DOMContentLoaded',()=>{
+  applyTileLayout(tileLayout);
 
   const searchField=document.getElementById('search');
   if(searchField){

@@ -396,13 +396,16 @@ button:hover {
 
 .app-card:hover {
   transform:translateY(-3px);
-  /* Не сбрасываем прозрачность плитки при наведении. */
+  /* Чёткая рамка появляется только при наведении курсора. */
   background-color:rgba(var(--card-rgb),var(--dashboard-card-opacity,.9));
-  border-color:rgba(124,140,255,.35);
+  border-color:var(--accent);
+  box-shadow:0 0 0 2px color-mix(in srgb, var(--accent) 42%, transparent);
 }
 
 .app-card.size-mini {
-  height:88px;
+  height:auto;
+  aspect-ratio:1 / 1;
+  min-height:0;
   padding:12px;
 }
 
@@ -1015,3 +1018,177 @@ body.embedded-open { overflow:hidden; }
 .selected-apps-export-footer{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}
 #downloadSelectedAppsButton:disabled{opacity:.45;cursor:not-allowed}
 @media(max-width:620px){.selected-apps-export-card{padding:22px 14px}.selected-apps-export-footer{flex-direction:column-reverse}.selected-apps-export-footer button{width:100%}.selected-app-export-item{padding:9px}}
+
+
+/* My DashboardKDV v2.17.0 layout toggle */
+.tile-layout-toggle {
+  display:flex;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:7px;
+  margin-left:auto;
+  color:var(--muted);
+  font-size:12px;
+}
+.tile-layout-toggle button {
+  min-height:36px;
+  padding:8px 11px;
+  font-size:12px;
+  white-space:nowrap;
+}
+.tile-layout-toggle button.active {
+  color:var(--text);
+  border-color:rgba(124,140,255,.7);
+  background:rgba(124,140,255,.17);
+}
+#dashboard.layout-horizontal .grid {
+  grid-template-columns:repeat(auto-fill,minmax(220px,1fr));
+}
+#dashboard.layout-vertical .grid {
+  grid-template-columns:minmax(0,300px);
+  justify-content:start;
+  grid-auto-flow:row;
+}
+#dashboard.layout-vertical .grid > .app-card {
+  width:100%;
+  max-width:300px;
+  min-width:0;
+  grid-column:auto !important;
+  box-sizing:border-box;
+}
+@media(max-width:700px) {
+  .tile-layout-toggle { margin-left:0; flex-basis:100%; order:3; }
+  #dashboard.layout-vertical .grid { grid-template-columns:minmax(0,min(300px,100%)); }
+}
+/* End My DashboardKDV v2.17.0 layout toggle */
+
+/* Align tile layout controls on the same row as category tabs */
+@media (min-width: 900px) {
+  .category-bar {
+    width: calc(100% - 410px);
+    box-sizing: border-box;
+    margin-bottom: 0;
+  }
+  .category-tools {
+    width: 410px;
+    box-sizing: border-box;
+    margin-left: auto;
+    margin-top: -50px;
+    margin-bottom: 72px;
+    justify-content: flex-end;
+    flex-wrap: nowrap;
+    min-height: 40px;
+  }
+  .category-tools .tile-layout-toggle {
+    margin-left: 0;
+    flex-wrap: nowrap;
+  }
+}
+@media (max-width: 899px) {
+  .category-bar { width: 100%; }
+  .category-tools {
+    width: 100%;
+    margin-top: 0;
+    margin-bottom: 22px;
+    flex-wrap: wrap;
+  }
+}
+
+
+/* MY-DASHBOARDKDV MINI COMPACT SQUARE FIX */
+/* Mini is a genuinely compact 1x1 tile, not a full grid-column square. */
+#dashboard .app-card.size-mini {
+  width: 112px !important;
+  min-width: 112px !important;
+  max-width: 112px !important;
+  height: 112px !important;
+  min-height: 112px !important;
+  max-height: 112px !important;
+  aspect-ratio: 1 / 1 !important;
+  box-sizing: border-box;
+  justify-self: start;
+  align-self: start;
+  grid-column: auto !important;
+  padding: 10px !important;
+  overflow: hidden;
+}
+/* Keep mini contents compact and prevent long titles from stretching the tile. */
+#dashboard .app-card.size-mini .icon {
+  width: 30px !important;
+  height: 30px !important;
+  margin-bottom: 5px;
+}
+#dashboard .app-card.size-mini .app-name {
+  font-size: 12px !important;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+#dashboard .app-card.size-mini .app-description,
+#dashboard .app-card.size-mini .app-url {
+  font-size: 10px !important;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+/* END MY-DASHBOARDKDV MINI COMPACT SQUARE FIX */
+
+
+/* MY-DASHBOARDKDV MINI SPACING AND EDIT CONTROLS FIX */
+/* Use half-width grid tracks so 1x1 tiles sit close together while regular cards span two tracks. */
+#dashboard.layout-horizontal .grid {
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)) !important;
+}
+#dashboard.layout-horizontal .grid > .app-card:not(.size-mini) {
+  grid-column: span 2;
+  min-width: 0;
+}
+#dashboard.layout-horizontal .grid > .app-card.size-mini {
+  grid-column: span 1 !important;
+  justify-self: start;
+}
+
+/* Keep edit controls inside compact mini tiles. */
+#dashboard .app-card.size-mini .actions {
+  left: 4px;
+  right: 4px;
+  bottom: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 3px;
+  max-width: calc(100% - 8px);
+  box-sizing: border-box;
+}
+#dashboard .app-card.size-mini .actions button {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  padding: 3px 4px;
+  font-size: 9px;
+  line-height: 1.15;
+  white-space: normal;
+}
+#dashboard .app-card.size-mini.order-editing {
+  padding-bottom: 34px !important;
+}
+#dashboard .app-card.size-mini .drag-handle {
+  top: 5px;
+  left: 5px;
+  width: 22px;
+  height: 22px;
+  font-size: 14px;
+}
+/* END MY-DASHBOARDKDV MINI SPACING AND EDIT CONTROLS FIX */
+
+
+/* LIGHT THEME HEADER CONTRAST FIX */
+/* Improve contrast of the dashboard name and page heading in light theme. */
+:root[data-theme="light"] .brand {
+  color: #3547b8 !important;
+  text-shadow: 0 1px 0 rgba(255,255,255,.8);
+}
+
+:root[data-theme="light"] h1 {
+  color: #111827 !important;
+  text-shadow: 0 1px 0 rgba(255,255,255,.85);
+}
+/* END LIGHT THEME HEADER CONTRAST FIX */

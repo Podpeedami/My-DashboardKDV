@@ -12,7 +12,7 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/static/pwa/icon-192.png">
   <link rel="apple-touch-icon" href="/static/pwa/icon-192.png">
   <title>My DashboardKDV</title>
-  <link rel="stylesheet" href="/static/style.css?v=58">
+  <link rel="stylesheet" href="/static/style.css?v=65">
 </head>
 <body>
 <div class="background"><div id="backgroundImage" class="background-image"></div></div>
@@ -39,6 +39,11 @@
 
   <section class="category-tools">
     <div id="orderEditHint" class="order-edit-hint"></div>
+    <div class="tile-layout-toggle" role="group" aria-label="Расположение плиток приложений">
+      <span>Плитки:</span>
+      <button id="tileLayoutHorizontal" type="button" aria-pressed="true" class="active" onclick="setTileLayout('horizontal')">↔ Горизонтально</button>
+      <button id="tileLayoutVertical" type="button" aria-pressed="false" onclick="setTileLayout('vertical')">↕ Вертикально</button>
+    </div>
     <button type="button" class="group-manage-button" onclick="openGroupManager()">📁 Группы</button>
   </section>
 
@@ -529,7 +534,7 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=58"></script>
+<script src="/static/app.js?v=61"></script>
 
 </body>
 </html>
