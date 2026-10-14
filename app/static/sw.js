@@ -1,9 +1,9 @@
-const CACHE_NAME = 'mdkdv-pwa-v2.17.0-mini-compact-square2';
+const CACHE_NAME = 'mdkdv-pwa-v2.17.0-service-templates1';
 const SHELL = [
   '/',
   '/manifest.webmanifest',
-  '/static/style.css?v=61',
-  '/static/app.js?v=61',
+  '/static/style.css?v=66',
+  '/static/app.js?v=66',
   '/static/assets/default-background.png',
   '/static/pwa/icon-192.png',
   '/static/pwa/icon-512.png'

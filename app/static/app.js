@@ -1255,19 +1255,47 @@ function editSelectedGroup(){if(typeof selectedCategory!=='number'||selectedGrou
 async function deleteSelectedGroup(){if(typeof selectedCategory!=='number'||selectedGroup==='all'){alert('Сначала выберите группу');return}const g=groups.find(x=>x.id===selectedGroup);if(!g||!confirm(`Удалить группу «${g.name}»? Приложения останутся в категории без группы.`))return;const r=await fetch(`/api/groups/${g.id}`,{method:'DELETE'});if(!r.ok){alert((await r.json()).detail||'Ошибка удаления группы');return}selectedGroup='all';await loadData();}
 
 const LOCAL_SERVICE_TEMPLATES = [
+  // Музыка и медиасерверы
   {id:'mstream',name:'mStream Music',description:'Музыкальный сервер и веб-плеер',icon:'🎵',port:3000,categoryHint:'Музыка',open_mode:'embedded'},
+  {id:'navidrome',name:'Navidrome',description:'Лёгкий музыкальный сервер',icon:'🎶',port:4533,categoryHint:'Музыка',open_mode:'external'},
   {id:'emby',name:'Emby',description:'Медиасервер и библиотека фильмов',icon:'📺',port:8096,categoryHint:'Медиа',open_mode:'external'},
   {id:'jellyfin',name:'Jellyfin',description:'Свободный медиасервер',icon:'🎬',port:8096,categoryHint:'Медиа',open_mode:'external'},
   {id:'plex',name:'Plex',description:'Медиатека и потоковое воспроизведение',icon:'🎞️',port:32400,categoryHint:'Медиа',open_mode:'external'},
-  {id:'portainer',name:'Portainer',description:'Управление Docker-контейнерами',icon:'🐳',port:9000,categoryHint:'Сервер',open_mode:'external'},
-  {id:'grafana',name:'Grafana',description:'Панели мониторинга и метрики',icon:'📊',port:3000,categoryHint:'Сервер',open_mode:'external'},
-  {id:'homeassistant',name:'Home Assistant',description:'Управление умным домом',icon:'🏠',port:8123,categoryHint:'Дом',open_mode:'external'},
+  {id:'tautulli',name:'Tautulli',description:'Статистика и мониторинг Plex',icon:'📈',port:8181,categoryHint:'Медиа',open_mode:'external'},
+  {id:'audiobookshelf',name:'Audiobookshelf',description:'Аудиокниги и подкасты',icon:'🎧',port:13378,categoryHint:'Медиа',open_mode:'external'},
+  {id:'immich',name:'Immich',description:'Управление фото и видео',icon:'🖼️',port:2283,categoryHint:'Медиа',open_mode:'external'},
+  // Торрент-клиенты и загрузки
+  {id:'qbittorrent',name:'qBittorrent',description:'Торрент-клиент с веб-интерфейсом',icon:'🌊',port:8080,categoryHint:'Загрузки',open_mode:'external'},
+  {id:'transmission',name:'Transmission',description:'Лёгкий торрент-клиент',icon:'⬇️',port:9091,categoryHint:'Загрузки',open_mode:'external'},
+  {id:'deluge',name:'Deluge',description:'Торрент-клиент и веб-панель',icon:'🧲',port:8112,categoryHint:'Загрузки',open_mode:'external'},
+  {id:'rutorrent',name:'ruTorrent',description:'Веб-интерфейс для rTorrent',icon:'🌀',port:8080,categoryHint:'Загрузки',open_mode:'external'},
+  {id:'sabnzbd',name:'SABnzbd',description:'Загрузчик Usenet',icon:'📥',port:8080,categoryHint:'Загрузки',open_mode:'external'},
+  {id:'nzbget',name:'NZBGet',description:'Загрузчик NZB/Usenet',icon:'📦',port:6789,categoryHint:'Загрузки',open_mode:'external'},
+  // Автоматизация медиатеки
   {id:'sonarr',name:'Sonarr',description:'Управление библиотекой сериалов',icon:'📺',port:8989,categoryHint:'Медиа',open_mode:'external'},
   {id:'radarr',name:'Radarr',description:'Управление библиотекой фильмов',icon:'🎬',port:7878,categoryHint:'Медиа',open_mode:'external'},
   {id:'lidarr',name:'Lidarr',description:'Управление музыкальной библиотекой',icon:'🎧',port:8686,categoryHint:'Музыка',open_mode:'external'},
+  {id:'readarr',name:'Readarr',description:'Управление книгами и аудиокнигами',icon:'📚',port:8787,categoryHint:'Медиа',open_mode:'external'},
+  {id:'bazarr',name:'Bazarr',description:'Поиск и управление субтитрами',icon:'💬',port:6767,categoryHint:'Медиа',open_mode:'external'},
   {id:'prowlarr',name:'Prowlarr',description:'Менеджер индексаторов',icon:'🧰',port:9696,categoryHint:'Сервер',open_mode:'external'},
+  {id:'jellyseerr',name:'Jellyseerr',description:'Запросы на фильмы и сериалы',icon:'🎟️',port:5055,categoryHint:'Медиа',open_mode:'external'},
+  {id:'overseerr',name:'Overseerr',description:'Запросы на фильмы и сериалы для Plex',icon:'🎫',port:5055,categoryHint:'Медиа',open_mode:'external'},
+  // Файлы, синхронизация и облако
+  {id:'nextcloud',name:'Nextcloud',description:'Личное облако и совместная работа',icon:'☁️',port:8080,categoryHint:'Файлы',open_mode:'external'},
+  {id:'syncthing',name:'Syncthing',description:'Синхронизация файлов между устройствами',icon:'🔄',port:8384,categoryHint:'Файлы',open_mode:'external'},
+  {id:'filebrowser',name:'File Browser',description:'Веб-управление файлами',icon:'📁',port:8080,categoryHint:'Файлы',open_mode:'external'},
+  // Сервер и сеть
+  {id:'portainer',name:'Portainer',description:'Управление Docker-контейнерами',icon:'🐳',port:9000,categoryHint:'Сервер',open_mode:'external'},
+  {id:'dockge',name:'Dockge',description:'Управление Docker Compose проектами',icon:'🐋',port:5001,categoryHint:'Сервер',open_mode:'external'},
+  {id:'proxmox',name:'Proxmox VE',description:'Управление виртуальными машинами и контейнерами',icon:'🖥️',port:8006,categoryHint:'Сервер',open_mode:'external'},
+  {id:'openmediavault',name:'OpenMediaVault',description:'Управление NAS и хранилищем',icon:'💽',port:80,categoryHint:'Сервер',open_mode:'external'},
+  {id:'nginx-proxy-manager',name:'Nginx Proxy Manager',description:'Управление reverse proxy и SSL',icon:'🌐',port:81,categoryHint:'Сеть',open_mode:'external'},
+  {id:'adguard',name:'AdGuard Home',description:'DNS-фильтрация рекламы и трекеров',icon:'🛡️',port:3000,categoryHint:'Сеть',open_mode:'external'},
+  {id:'pihole',name:'Pi-hole',description:'Сетевой DNS-блокировщик рекламы',icon:'🕳️',port:80,categoryHint:'Сеть',open_mode:'external'},
+  {id:'uptime-kuma',name:'Uptime Kuma',description:'Мониторинг доступности сервисов',icon:'💚',port:3001,categoryHint:'Сервер',open_mode:'external'},
+  {id:'grafana',name:'Grafana',description:'Панели мониторинга и метрики',icon:'📊',port:3000,categoryHint:'Сервер',open_mode:'external'},
   {id:'prometheus',name:'Prometheus',description:'Сбор и хранение метрик',icon:'📈',port:9090,categoryHint:'Сервер',open_mode:'external'},
-  {id:'jellyseerr',name:'Jellyseerr',description:'Запросы на фильмы и сериалы',icon:'🎟️',port:5055,categoryHint:'Медиа',open_mode:'external'}
+  {id:'homeassistant',name:'Home Assistant',description:'Управление умным домом',icon:'🏠',port:8123,categoryHint:'Дом',open_mode:'external'}
 ];
 
 function openServiceTemplatesModal(){
