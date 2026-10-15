@@ -765,7 +765,7 @@ async function savePanelLayout(){
         tile_title_color:/^#[0-9a-f]{6}$/i.test(String(a.tile_title_color||''))?a.tile_title_color:'#ffffff',
         tile_description_color:/^#[0-9a-f]{6}$/i.test(String(a.tile_description_color||''))?a.tile_description_color:'#cbd5e1',
         tile_url_color:/^#[0-9a-f]{6}$/i.test(String(a.tile_url_color||''))?a.tile_url_color:'#94a3b8',
-        tile_show_description:a.tile_show_description!==false,
+        tile_show_description:!(a.tile_show_description===false||a.tile_show_description===0||a.tile_show_description==="0"),
         tile_show_url:!!a.tile_show_url
       };
       const r=await fetch(`/api/apps/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
@@ -1002,7 +1002,7 @@ function setTileAppearanceForm(a={}){
   setColor('tileTitleColor',a.tile_title_color,'#ffffff');
   setColor('tileDescriptionColor',a.tile_description_color,'#cbd5e1');
   setColor('tileUrlColor',a.tile_url_color,'#94a3b8');
-  const desc=document.getElementById('tileShowDescription');if(desc)desc.checked=a.tile_show_description!==false;
+  const desc=document.getElementById('tileShowDescription');if(desc)desc.checked=!(a.tile_show_description===false||a.tile_show_description===0||a.tile_show_description==="0");
   const showUrl=document.getElementById('tileShowUrl');if(showUrl)showUrl.checked=!!a.tile_show_url;
   updateTileAppearancePreview();
 }
