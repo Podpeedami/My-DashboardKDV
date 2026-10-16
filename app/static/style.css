@@ -1192,3 +1192,40 @@ body.embedded-open { overflow:hidden; }
   text-shadow: 0 1px 0 rgba(255,255,255,.85);
 }
 /* END LIGHT THEME HEADER CONTRAST FIX */
+
+
+/* Keep dashboard action buttons inside Settings */
+.dashboard-control-actions {
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  margin:10px 0 14px;
+}
+.dashboard-control-actions button {
+  min-height:38px;
+}
+.settings-tile-layout {
+  margin:8px 0 0;
+  justify-content:flex-start;
+}
+.settings-tile-layout span {
+  color:var(--text);
+  font-size:13px;
+  font-weight:600;
+}
+@media(max-width:620px) {
+  .dashboard-control-actions {
+    display:grid;
+    grid-template-columns:1fr;
+  }
+  .dashboard-control-actions button {
+    width:100%;
+  }
+  .settings-tile-layout {
+    align-items:stretch;
+    flex-direction:column;
+  }
+  .settings-tile-layout button {
+    width:100%;
+  }
+}

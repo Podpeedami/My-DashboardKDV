@@ -12,7 +12,7 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/static/pwa/icon-192.png">
   <link rel="apple-touch-icon" href="/static/pwa/icon-192.png">
   <title>My DashboardKDV</title>
-  <link rel="stylesheet" href="/static/style.css?v=66">
+  <link rel="stylesheet" href="/static/style.css?v=67">
 </head>
 <body>
 <div class="background"><div id="backgroundImage" class="background-image"></div></div>
@@ -23,7 +23,7 @@
       <div class="brand">My DashboardKDV</div>
       <h1>Все приложения в одном месте</h1>
     </div>
-    <div class="header-actions"><button id="themeToggle" type="button">☀️ Светлая</button><button id="settingsButton" type="button">⚙ Настройки</button><button id="pwaInstallButton" type="button" class="hidden">📲 Установить</button><button id="bulkSelectButton" type="button" onclick="toggleBulkSelectMode()">☑ Массово</button><button id="panelEditButton" type="button">✏️ Редактировать</button><button id="panelEditCancel" type="button" class="hidden">✖ Отмена</button><button type="button" onclick="openServiceTemplatesModal()">📦 Шаблоны</button><button class="primary" onclick="openAppModal()">＋ Приложение</button></div>
+    <div class="header-actions"><button id="settingsButton" type="button">⚙ Настройки</button></div>
   </header>
 
   <section class="toolbar">
@@ -37,15 +37,7 @@
 
   <nav id="categories" class="category-bar"></nav>
 
-  <section class="category-tools">
-    <div id="orderEditHint" class="order-edit-hint"></div>
-    <div class="tile-layout-toggle" role="group" aria-label="Расположение плиток приложений">
-      <span>Плитки:</span>
-      <button id="tileLayoutHorizontal" type="button" aria-pressed="true" class="active" onclick="setTileLayout('horizontal')">↔ Горизонтально</button>
-      <button id="tileLayoutVertical" type="button" aria-pressed="false" onclick="setTileLayout('vertical')">↕ Вертикально</button>
-    </div>
-    <button type="button" class="group-manage-button" onclick="openGroupManager()">📁 Группы</button>
-  </section>
+
 
   <div id="groupsBar" class="groups-bar hidden"></div>
 
@@ -250,6 +242,25 @@
     </nav>
 
     <section class="settings-group active" data-settings-panel="general">
+      <div class="settings-section">
+        <h3>🛠 Управление панелью</h3>
+        <div class="dashboard-control-actions">
+          <button id="themeToggle" type="button">☀️ Светлая</button>
+          <button id="pwaInstallButton" type="button" class="hidden">📲 Установить</button>
+          <button id="bulkSelectButton" type="button" onclick="closeSettingsModal();toggleBulkSelectMode()">☑ Массово</button>
+          <button id="panelEditButton" type="button" onclick="closeSettingsModal()">✏️ Редактировать</button>
+          <button id="panelEditCancel" type="button" class="hidden" onclick="closeSettingsModal()">✖ Отмена</button>
+          <button type="button" onclick="closeSettingsModal();openServiceTemplatesModal()">📦 Шаблоны</button>
+          <button class="primary" type="button" onclick="closeSettingsModal();openAppModal()">＋ Приложение</button>
+          <button type="button" class="group-manage-button" onclick="closeSettingsModal();openGroupManager()">📁 Группы</button>
+        </div>
+        <div class="tile-layout-toggle settings-tile-layout" role="group" aria-label="Расположение плиток приложений">
+          <span>Расположение плиток:</span>
+          <button id="tileLayoutHorizontal" type="button" aria-pressed="true" class="active" onclick="setTileLayout('horizontal')">↔ Горизонтально</button>
+          <button id="tileLayoutVertical" type="button" aria-pressed="false" onclick="setTileLayout('vertical')">↕ Вертикально</button>
+        </div>
+        <div class="settings-note compact">Основные действия и переключение расположения плиток доступны здесь, чтобы не загромождать главную страницу.</div>
+      </div>
       <div class="settings-section">
         <h3>🎨 Тема</h3>
         <label>Оформление
@@ -534,7 +545,7 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=66"></script>
+<script src="/static/app.js?v=67"></script>
 
 </body>
 </html>
