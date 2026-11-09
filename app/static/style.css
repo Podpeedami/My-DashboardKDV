@@ -163,8 +163,9 @@ button:hover {
 
 .category-bar {
   display:flex;
+  flex-wrap:wrap;
   gap:8px;
-  overflow-x:auto;
+  overflow-x:visible;
   margin-top:15px;
   padding:4px 0 10px;
 }
@@ -173,7 +174,7 @@ button:hover {
   display:flex;
   align-items:center;
   gap:8px;
-  white-space:nowrap;
+  white-space:normal;
 }
 
 .category.active {
